@@ -1,10 +1,14 @@
 import pybgpstream
+import pprint
 
-stream = pybgpstream.BGPStream(
-    from_time="2017-07-07 00:00:00", until_time="2017-07-07 00:10:00 UTC",
-    collectors=["route-views.sg", "route-views.eqix"],
-    record_type="updates",
-    filter="peer 11666 and prefix more 210.180.0.0/16"
-)
+stream = pybgpstream.BGPStream()
+
+stream.add_filter('record-type', 'updates')
+stream.add_filter('project', 'routeviews')
+stream.set_data_interface('singlefile')
+stream.set_data_interface_option('singlefile', 'rib-file', 'updates.20230102.0230')
+
+for elem in stream:
+    pprint.pprint(elem.fields)
 
 print("Test Finished")
