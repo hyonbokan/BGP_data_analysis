@@ -1,6 +1,9 @@
-# Assignment 7: Explore ROV deployment using BGP2GO and BGPStream
+# BGP Routing Data Analysis with PyBGPStream
 
-This repository contains my personal implementation of Assignment 7 from the course CSE291E Internet Data Science for Cybersecurity, taught by Prof. KC Claffy at UC San Diego.
+The repository contains:
+* My personal attempt to answer the questions in Assignment 7 from the course CSE291E Internet Data Science for Cybersecurity, taught by Prof. KC Claffy at UC San Diego.
+
+* Analysis code of real-life cases of BGP-related incidents 
 
 Course Link: [CSE291E Internet Data Science for Cybersecurity](https://cseweb.ucsd.edu/classes/wi23/cse291-e/syllabus.html)
 
