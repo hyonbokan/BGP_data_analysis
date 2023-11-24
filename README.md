@@ -6,9 +6,6 @@ Course Link: [CSE291E Internet Data Science for Cybersecurity](https://cseweb.uc
 
 * Analysis of real-life cases of BGP hijacking incidents utilizing PyBGPStream. By referencing publicly available documentation of these events. I have created Python scripts using PyBGPStream to detect and visualize the anomalies resulting from these hijacking incidents.
 
-## Description
-The goal of this assignment is to explore and analyze raw BGP (Border Gateway Protocol) routing data to address the research question of which collector peers forward ROA-invalid updates to the collector. The assignment covers various aspects of BGP data analysis, including parsing MRT files, using CAIDA's BGP2GO system, and working with BGPStream. Additionally, a Python script is included in the repository to demonstrate the extraction of BGP updates using BGPStream.
-
 # Contents
 - `Explore ROV deployment using.pdf`: The original file of Assignment 7 provided by the course.
 - `bgp_updates_analysis.ipynb`: Jupyter notebook with Python scripts demonstrating BGP updates extraction using BGPStream.
