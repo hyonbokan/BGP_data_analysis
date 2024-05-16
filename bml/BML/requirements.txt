@@ -1,0 +1,10 @@
+ipaddress
+numpy
+pandas
+ujson
+editdistance
+networkit
+decorator
+networkx>=2.4
+ipywidgets
+karateclub
