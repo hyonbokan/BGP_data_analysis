@@ -19,14 +19,3 @@ Getting started with BML: https://kevinhoarau.github.io/BML/#getting-started
 
 Documentation is available online: https://kevinhoarau.github.io/BML/
 
-## References
-
-If our work is helpful to you, please kindly cite our paper as:
-```
-@inproceedings{hoarau2021bml,
-  title={BML: an efficient and versatile tool for BGP dataset collection},
-  author={Hoarau, Kevin and Tournoux, Pierre Ugo and Razafindralambo, Tahiry},
-  booktitle={2021 IEEE International Conference on Communications Workshops (ICC Workshops)},
-  year={2021}
-}
-```

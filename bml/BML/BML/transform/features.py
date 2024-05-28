@@ -1,6 +1,5 @@
 import editdistance
 from BML.transform import BaseTransform
-from datetime import datetime
 
 class Features(BaseTransform):
 
@@ -13,7 +12,6 @@ class Features(BaseTransform):
     def transforms(self, index, routes, updates):
 
         features = {
-            "timestamp": "",  # To store the timestamp,
             "nb_A" : 0, # Number of announcements
             "nb_W" : 0, # Number of withdrawals:
             "nb_implicit_W" : 0,  
@@ -52,7 +50,9 @@ class Features(BaseTransform):
             return(features)
 
         c = 0
-        
+
+        prevTime = 0
+
         A_per_prefix = {}
         W_per_prefix = {}
 
@@ -62,8 +62,8 @@ class Features(BaseTransform):
         inter_time = []
         editDist = []
 
-        for update in updates:
-            features["timestamp"] =  datetime.utcfromtimestamp(update.time).strftime('%Y-%m-%d %H:%M:%S')
+        for update in updates:    
+
             if(update["fields"]["prefix"] not in routes):
                     routes[update["fields"]["prefix"]] = {}
             if(update["collector"] not in routes[update["fields"]["prefix"]]):
@@ -168,4 +168,3 @@ class Features(BaseTransform):
     def postProcess(self, transformedData):
         transformedData.pop(0)
         return(transformedData)
-
