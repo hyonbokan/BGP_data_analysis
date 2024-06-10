@@ -1,0 +1,29 @@
+ASN (Autonomous System Number) 4809:
+
+Timestamp: 2018-04-25 09:35:00
+Reason: Extremely high number of routes (178) and new routes (177) compared to the average.
+Type of Anomaly: Prefix Hijacking or Route Injection
+
+Timestamp: 2018-04-25 09:40:00
+Reason: Extremely high number of withdrawals (178) compared to the average.
+Type of Anomaly: Route Flapping or Mass Withdrawal
+
+Timestamp: 2018-04-25 09:45:00
+Reason: High number of routes (135) and new routes (116), and an unusually high number of route changes (19).
+Type of Anomaly: Route Flapping or Prefix Hijacking
+
+Timestamp: 2018-04-25 10:05:00
+Reason: High average path length (3.0) and max edit distance (5.0), indicating significant changes in routing paths.
+Type of Anomaly: Path Manipulation
+
+Timestamp: 2018-04-25 11:05:00
+Reason: Extremely high number of routes (192) and new routes (192).
+Type of Anomaly: Prefix Hijacking or Route Injection
+
+Timestamp: 2018-04-25 11:10:00
+Reason: Extremely high number of routes (249) and announcements (255).
+Type of Anomaly: Prefix Hijacking or Route Injection
+
+Timestamp: 2018-04-25 11:15:00
+Reason: Extremely high number of withdrawals (247) and high max edit distance (4.0), indicating significant changes in routing paths.
+Type of Anomaly: Route Flapping or Path Manipulation
