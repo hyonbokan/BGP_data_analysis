@@ -1,13 +1,13 @@
 ASN (Autonomous System Number) 4809:
 The analysis identified several timestamps where there were anomalous behaviors based on significant spikes in the number of new routes, route withdrawals, and edit distances of AS-paths:
 
-2018-04-25 09:35:00 - A spike in new routes (177) without corresponding withdrawals.
-2018-04-25 09:40:00 - A substantial number of route withdrawals (178) following a spike in new routes.
-2018-04-25 09:45:00 - Another large number of new routes (116) observed.
-2018-04-25 09:50:00 - A high number of withdrawals (135) immediately after new route additions.
-2018-04-25 11:05:00 - A significant number of new routes (192) noted, unusually high compared to typical numbers.
-2018-04-25 11:15:00 - A very high number of route withdrawals (247), possibly indicating network instability or a configuration issue.
-2018-04-25 10:05:00 & 2018-04-25 11:55:00 - Notable high average edit distances for single route updates, indicating major path changes.
+1. 2018-04-25 09:35:00 - A spike in new routes (177) without corresponding withdrawals.
+2. 2018-04-25 09:40:00 - A substantial number of route withdrawals (178) following a spike in new routes.
+3. 2018-04-25 09:45:00 - Another large number of new routes (116) observed.
+4. 2018-04-25 09:50:00 - A high number of withdrawals (135) immediately after new route additions.
+5. 2018-04-25 11:05:00 - A significant number of new routes (192) noted, unusually high compared to typical numbers.
+6. 2018-04-25 11:15:00 - A very high number of route withdrawals (247), possibly indicating network instability or a configuration issue.
+7-8. 2018-04-25 10:05:00 & 2018-04-25 11:55:00 - Notable high average edit distances for single route updates, indicating major path changes.
 
 Type: New Routes Spike
 Type: Path Change Anomaly

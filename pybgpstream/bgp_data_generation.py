@@ -1,113 +1,228 @@
-# python bgp_data_collector.py --start_time "2021-02-11 03:30:00" --end_time "2021-02-11 05:59:59" --message_type "updates" --collectors "route-views.sg" "route-views.eqix" --asn "28548"
-
 import pybgpstream
-import matplotlib.pyplot as plt
-from datetime import datetime
-from collections import defaultdict
+import editdistance
+from datetime import datetime, timedelta
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 import argparse
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description='Collect and store BGP data using pybgpstream.')
-    parser.add_argument('--start_time', type=str, required=True, help='Start time in UTC (format: YYYY-MM-DD HH:MM:SS)')
-    parser.add_argument('--end_time', type=str, required=True, help='End time in UTC (format: YYYY-MM-DD HH:MM:SS)')
-    parser.add_argument('--message_type', type=str, choices=['ribs', 'updates'], required=True, help='Type of BGP message to collect (ribs or updates)')
-    parser.add_argument('--collectors', type=str, nargs='+', default=['rrc00'], help='List of BGP collectors to use (default: rrc00)')
-    parser.add_argument('--asn', type=str, default=None, help='Target ASN for filtering (default: None)')
-    return parser.parse_args()
+# python bgp_data_generation.py --asn 8529 --from_time "2017-01-05 07:00:00" --until_time "2017-01-05 22:00:00" --collectors rrc00 --output_file bgp_features_asn_8529_iran.csv
+def build_routes_as(routes):
+    routes_as = {}
+    for prefix in routes:
+        for collector in routes[prefix]:
+            for peer_asn in routes[prefix][collector]:
+                path = routes[prefix][collector][peer_asn]
+                if len(path) == 0:
+                    continue
+                asn = path[-1]
+                if asn not in routes_as:
+                    routes_as[asn] = {}
+                routes_as[asn][prefix] = path
+    return routes_as
 
-def collect_bgp_data(start_time, end_time, message_type, collectors, asn):
+def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
+    features = {
+        "timestamp": None,
+        "asn": target_asn,
+        "num_routes": 0,
+        "num_new_routes": 0,
+        "num_withdrawals": 0,
+        "num_origin_changes": 0,
+        "num_route_changes": 0,
+        "max_path_length": 0,
+        "avg_path_length": 0,
+        "max_edit_distance": 0,
+        "avg_edit_distance": 0,
+        "num_announcements": temp_counts["num_announcements"],
+        "num_withdrawals": temp_counts["num_withdrawals"],
+        "num_unique_prefixes_announced": 0
+    }
+
+    routes_as = build_routes_as(routes)
+
+    if index > 0:
+        if target_asn in routes_as:
+            num_routes = len(routes_as[target_asn])
+            sum_path_length = 0
+            sum_edit_distance = 0
+
+            for prefix in routes_as[target_asn].keys():
+                if target_asn in old_routes_as and prefix in old_routes_as[target_asn]:
+                    path = routes_as[target_asn][prefix]
+                    path_old = old_routes_as[target_asn][prefix]
+
+                    if path != path_old:
+                        features["num_route_changes"] += 1
+
+                    if path[-1] != path_old[-1]:
+                        features["num_origin_changes"] += 1
+
+                    path_length = len(path)
+                    path_old_length = len(path_old)
+
+                    sum_path_length += path_length
+                    if path_length > features["max_path_length"]:
+                        features["max_path_length"] = path_length
+
+                    edist = editdistance.eval(path, path_old)
+                    sum_edit_distance += edist
+                    if edist > features["max_edit_distance"]:
+                        features["max_edit_distance"] = edist
+                else:
+                    features["num_new_routes"] += 1
+
+            features["num_routes"] = num_routes
+            features["avg_path_length"] = sum_path_length / num_routes
+            features["avg_edit_distance"] = sum_edit_distance / num_routes
+
+        if target_asn in old_routes_as:
+            for prefix in old_routes_as[target_asn].keys():
+                if not (target_asn in routes_as and prefix in routes_as[target_asn]):
+                    features["num_withdrawals"] += 1
+
+    # Add the number of unique prefixes announced
+    features["num_unique_prefixes_announced"] = len(routes_as.get(target_asn, {}))
+
+    return features, routes_as
+
+def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], output_file='bgp_features.csv'):
     stream = pybgpstream.BGPStream(
-        from_time=start_time,
-        until_time=end_time,
-        collectors=collectors,
-        record_type=message_type
+        from_time=from_time,
+        until_time=until_time,
+        record_type="updates",
+        collectors=collectors
     )
 
-    aggregate_bgp_data = []
-    summary_stats = defaultdict(lambda: defaultdict(lambda: {'total_prefixes': 0, 'unique_as_paths': set(), 'total_announcements': 0, 'total_withdrawals': 0}))
+    all_features = []
+    old_routes_as = {}
+    routes = {}
+    current_window_start = datetime.strptime(from_time, "%Y-%m-%d %H:%M:%S")
+    index = 0
+
+    # Initialize temporary counts for announcements and withdrawals
+    temp_counts = {
+        "num_announcements": 0,
+        "num_withdrawals": 0
+    }
 
     for rec in stream.records():
         for elem in rec:
-            if elem.type in {"R", "A", "W"}:
-                fields = elem.fields
-                timestamp = datetime.utcfromtimestamp(rec.time).strftime('%Y-%m-%d %H:%M:%S')
-                collector_project = rec.project
-                collector_name = rec.collector
-                prefix = fields.get("prefix", "")
-                as_path = fields.get("as-path", "").split()
-                next_hop = fields.get("next-hop", "")
-                origin_as = as_path[-1] if as_path else ""
-                community = fields.get("community", "")
-                atomic_aggregate = fields.get("atomic-aggregate", "")
-                aggregator = fields.get("aggregator", "")
+            update = elem.fields
+            elem_time = datetime.utcfromtimestamp(elem.time)
 
-                if asn and asn not in as_path:
-                    continue
+            if elem_time >= current_window_start + timedelta(minutes=5):
+                features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
+                features['timestamp'] = current_window_start
+                all_features.append(features)
 
-                aggregate_bgp_data.append({
-                    'timestamp': timestamp,
-                    'collector_project': collector_project,
-                    'collector_name': collector_name,
-                    'origin_as': origin_as,
-                    'next_hop': next_hop,
-                    'prefix': prefix,
-                    'as_path': ' '.join(as_path),
-                    'community': community,
-                    'atomic_aggregate': atomic_aggregate,
-                    'aggregator': aggregator,
-                    'update_type': elem.type
-                })
+                # Reset for the new window
+                current_window_start += timedelta(minutes=5)
+                routes = {}
+                index += 1
+                temp_counts = {
+                    "num_announcements": 0,
+                    "num_withdrawals": 0
+                }
 
-                summary_stats[origin_as][timestamp]['total_prefixes'] += 1
-                summary_stats[origin_as][timestamp]['unique_as_paths'].add(' '.join(as_path))
-                if elem.type == "A":
-                    summary_stats[origin_as][timestamp]['total_announcements'] += 1
-                elif elem.type == "W":
-                    summary_stats[origin_as][timestamp]['total_withdrawals'] += 1
+            prefix = update.get("prefix")
+            if prefix is None:
+                continue
 
-    for as_stats in summary_stats.values():
-        for stats in as_stats.values():
-            stats['unique_as_paths'] = len(stats['unique_as_paths'])
+            peer_asn = update.get("peer_asn", "unknown")
+            collector = rec.collector
 
-    df_aggregate = pd.DataFrame(aggregate_bgp_data)
-    df_analysis = pd.concat({origin_as: pd.DataFrame.from_dict(data, orient='index').reset_index().rename(columns={'index': 'timestamp'}) for origin_as, data in summary_stats.items()})
+            if prefix not in routes:
+                routes[prefix] = {}
+            if collector not in routes[prefix]:
+                routes[prefix][collector] = {}
 
-    return df_aggregate, df_analysis
+            if elem.type == 'A':
+                path = update['as-path'].split()
+                if path[-1] == target_asn:
+                    routes[prefix][collector][peer_asn] = path
+                    temp_counts["num_announcements"] += 1
+            elif elem.type == 'W':
+                if prefix in routes and collector in routes[prefix]:
+                    if peer_asn in routes[prefix][collector]:
+                        if routes[prefix][collector][peer_asn][-1] == target_asn:
+                            routes[prefix][collector].pop(peer_asn, None)
+                            temp_counts["num_withdrawals"] += 1
 
-def main():
-    args = parse_arguments()
+    # Final aggregation for the last window
+    features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
+    features['timestamp'] = current_window_start
+    all_features.append(features)
 
-    df_aggregate, df_analysis = collect_bgp_data(
-        start_time=args.start_time,
-        end_time=args.end_time,
-        message_type=args.message_type,
-        collectors=args.collectors,
-        asn=args.asn
-    )
+    df_features = pd.json_normalize(all_features, sep='_').fillna(0)
+    df_features.to_csv(output_file, index=False)
+    print(f"Data saved to {output_file}")
 
-    df_aggregate.to_csv('aggregate_bgp_data.csv', index=False)
-    df_analysis.to_csv('bgp_analysis.csv', index=False)
+    return df_features
 
-    print("Aggregate DataFrame:")
-    print(df_aggregate.head())
-    print("\nAnalysis DataFrame:")
-    print(df_analysis.head())
+def plot_statistics(df_features, target_asn):
+    numeric_cols = df_features.select_dtypes(include=['number']).columns
 
-    plt.figure(figsize=(12, 6))
-    for origin_as, group in df_analysis.groupby(level=0):
-        timestamps = sorted(group['timestamp'])
-        counts = group['total_prefixes']
-        plt.plot(timestamps, counts, marker='o', linestyle='-', label=f'AS{origin_as}')
+    # Define the color map
+    num_colors = len(numeric_cols)
+    color_map = cm.get_cmap('tab20', num_colors)
 
-    plt.xlabel('Time (Minute)')
-    plt.ylabel('Number of Prefix Updates')
-    plt.title('Prefix Updates Over Time by Origin AS')
-    plt.xticks(rotation=45, ha='right')
-    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-    plt.legend(title='Origin AS')
+    # Plotting the statistics
+    plt.figure(figsize=(14, 8))
+    for i, col in enumerate(numeric_cols):
+        plt.plot(df_features['timestamp'], df_features[col], label=col, color=color_map(i))
+
+    plt.xlabel('Time')
+    plt.ylabel('Value')
+    plt.title(f'Statistics for ASN {target_asn}')
+    plt.legend(loc='upper right')
+    plt.grid(True)
+    plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
+
+def detect_anomalies(df, numeric_cols, threshold_multiplier=2):
+    diff = df[numeric_cols].diff().abs()
+    thresholds = diff.mean() + threshold_multiplier * diff.std()
+    anomalies = (diff > thresholds).any(axis=1)
+    
+    # Initialize the anomaly_status column with "no anomalies detected"
+    df['anomaly_status'] = "no anomalies detected"
+    
+    # Label anomalies and add reasons
+    for idx in df[anomalies].index:
+        reasons = []
+        for col in numeric_cols:
+            if diff.loc[idx, col] > thresholds[col]:
+                reasons.append(f"{col}={df.loc[idx, col]}")
+        if reasons:
+            df.at[idx, 'anomaly_status'] = f"anomaly due to high value of {', '.join(reasons)}"
+    
+    return df
+
+def main():
+    parser = argparse.ArgumentParser(description="Extract BGP data and detect anomalies.")
+    parser.add_argument('--asn', type=str, required=True, help='Target ASN to monitor.')
+    parser.add_argument('--from_time', type=str, required=True, help='Start time for the BGP data collection (format: YYYY-MM-DD HH:MM:SS).')
+    parser.add_argument('--until_time', type=str, required=True, help='End time for the BGP data collection (format: YYYY-MM-DD HH:MM:SS).')
+    parser.add_argument('--collectors', type=str, nargs='+', default=['rrc00'], help='List of BGP collectors to use.')
+    parser.add_argument('--output_file', type=str, default='bgp_features.csv', help='Output CSV file to save the extracted features.')
+
+    args = parser.parse_args()
+
+    # Extract BGP data
+    df_features = extract_bgp_data(args.asn, args.from_time, args.until_time, args.collectors, args.output_file)
+    df_features['timestamp'] = pd.to_datetime(df_features['timestamp'])
+    numeric_cols = df_features.select_dtypes(include=['number']).columns
+
+    # Detect anomalies
+    df_features = detect_anomalies(df_features, numeric_cols)
+
+    # Plot statistics
+    plot_statistics(df_features, args.asn)
+
+    # Display the DataFrame to verify
+    print(df_features[['timestamp', 'anomaly_status']])
 
 if __name__ == "__main__":
     main()

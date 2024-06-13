@@ -1,0 +1,30 @@
+ASN (Autonomous System Number) 4809 Anomaly Report:
+
+1. Timestamp: 2018-04-25 09:35:00
+Reason: Sudden increase in num_withdrawals (178), num_origin_changes (1), and num_route_changes (4).
+Type of Anomaly: Route Flap
+
+2. Timestamp: 2018-04-25 09:40:00
+Reason: Sudden increase in num_routes (19), num_new_routes (19), and num_withdrawals (178).
+Type of Anomaly: Route Flap
+
+3. Timestamp: 2018-04-25 09:45:00
+Reason: High avg_path_length (0.985) and avg_edit_distance (0.141) compared to previous records.
+Type of Anomaly: Path Attribute Anomaly
+
+4. Timestamp: 2018-04-25 10:05:00
+Reason: Significant increase in num_announcements (57) and avg_edit_distance (5.0) compared to previous records.
+Type of Anomaly: Path Attribute Anomaly
+
+5. Timestamp: 2018-04-25 11:10:00
+Reason: Large increase in num_routes (249) and num_new_routes (57) compared to previous records.
+Type of Anomaly: Route Flap
+
+6. Timestamp: 2018-04-25 11:15:00
+Reason: Large increase in num_withdrawals (247) and avg_path_length (5.0) compared to previous records.
+Type of Anomaly: Route Flap
+
+7. Timestamp: 2018-04-25 11:15:00
+Reason: Sudden increase in num_announcements (18) compared to previous records.
+Type of Anomaly: Route Flap
+
