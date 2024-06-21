@@ -1,1 +1,0 @@
-pdoc --html --force BML --template-dir templates

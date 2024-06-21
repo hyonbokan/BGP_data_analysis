@@ -1,25 +1,43 @@
-# BGP Routing Data Analysis with PyBGPStream and BML
+# BGP Routing Data Analysis and Feature Extraction
 
-The repository contains:
-* Introduction to BGP: My personal attempt to answer the questions in Assignment 7 from the course CSE291E Internet Data Science for Cybersecurity, taught by Prof. KC Claffy at UC San Diego.
-Course Link: [CSE291E Internet Data Science for Cybersecurity](https://cseweb.ucsd.edu/classes/wi23/cse291-e/syllabus.html)
+## Overview
+This repository contains a collection of Python scripts utilizing PyBGPStream for analyzing BGP routing data and extracting relevant features. These scripts are designed to aid in the understanding and research of BGP routing behaviors, including updates, hijackings, and real-time analysis.
 
-* Analysis of real-life cases of BGP hijacking incidents utilizing PyBGPStream. By referencing publicly available documentation of these events. I have created Python scripts using PyBGPStream to detect and visualize the anomalies resulting from these hijacking incidents.
+ **Install PyBGPStream**:
+Visit [PyBGPStream Installation Guide](https://bgpstream.caida.org/docs/install/pybgpstream) for detailed installation instructions.
 
-# Contents
-- `Explore ROV deployment using.pdf`: The original file of Assignment 7 provided by the course.
-- `bgp_updates_analysis.ipynb`: Jupyter notebook with Python scripts demonstrating BGP updates extraction using BGPStream.
-- `download_mrt.py`: Python script for downloading raw MRT data from [University of Oregon Route Views Archive Project](http://archive.routeviews.org/)
-- `PyBGPStream_real_cases`:  Jupyter notebook containing the Python scripts analyze and plot the BGP anomalies associated with real-life BGP hijacking incidents.
+### Contents
 
-## BGP Data
+1. **BGP Update Analysis Tutorial**: `bgp_updates_analysis.ipynb`
+    
+    A Jupyter notebook that provides a step-by-step guide on how to analyze BGP updates using PyBGPStream. This tutorial is for beginners looking to understand the basics of BGP data handling and use of tools such as BGPGo and PyBGPStream.
 
-Please note that the actual data of BGP update messages for the ROV-invalid prefixes was not included in the repository due to its size. However, the script of collecting update messages with required filters is provided in `bgp_updates_analysis.ipynb`.
+2. **Analysis of Real Cases of BGP Hijacking**: `PyBGPStream_real_cases.ipynb`,  `PyBGPStream_real_cases_2.ipynb`
+    
+    This notebook analyzes actual BGP hijacking incidents, demonstrating how to detect and examine suspicious BGP activities.
 
-The data is useful for analyzing the behavior and trends of ROV-invalid prefixes over time.
+3. **Real-Time BGP Analysis Script**: `PyBGPStream_real_time.ipynb`
 
-# Disclaimer
-**Please note** that I am not a student at UC San Diego, and this repository represents my personal attempt at completing the assignment. As a self-learner, I found it valuable to work on fundamental CS courses independently. While I have made efforts to ensure accuracy, there may be mistakes. Nonetheless, I hope this repository can be helpful to others with a similar background who are learning CS fundamental courses on their own.
+    A script designed for real-time analysis of BGP data streams. It can be used to monitor live BGP announcements and withdrawals for research and operational purposes.
 
+4. **BGP Data Analysis and Feature Extraction**: `bgp_data_analysis_feature_extraction.ipynb`
 
-Feel free to explore the contents of the repository and refer to the provided files for more details.
+4. **BGP Data Analysis and Feature Extraction**: `bgp_data_analysis_feature_extraction.ipynb`
+
+    This notebook is designed for extracting detailed features from BGP data per Autonomous System Number (ASN), which can be utilized for machine learning or Large Language Model training. The script processes BGP data to calculate and extract various statistics and features.
+
+    **Extracted Features Include**:
+    - **Timestamp**: Time of the BGP update.
+    - **ASN (Autonomous System Number)**: The target ASN for which features are being extracted.
+    - **Number of Routes**: Total number of active routes observed.
+    - **Number of New Routes**: Number of new routes added.
+    - **Number of Withdrawals**: Total route withdrawals observed.
+    - **Number of Origin Changes**: Changes in the origin ASN of routes.
+    - **Number of Route Changes**: Changes in the routing paths.
+    - **Maximum Path Length**: The longest AS path observed.
+    - **Average Path Length**: The average length of AS paths.
+    - **Maximum Edit Distance**: Maximum edit distance observed in AS paths from one update to the next.
+    - **Average Edit Distance**: Average edit distance across all updates.
+    - **Number of Announcements**: Total BGP announcements observed.
+    - **Number of Unique Prefixes Announced**: Number of unique IP prefixes announced.
+
