@@ -3,14 +3,30 @@ import editdistance
 from datetime import datetime, timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+from matplotlib.colors import get_named_colors_mapping
 
+def plot_statistics(df_features, target_asn):
+    numeric_cols = df_features.select_dtypes(include=['number']).columns
 
-import pybgpstream
-import editdistance
-from datetime import datetime, timedelta
-import pandas as pd
+    # Define the color map
+    num_colors = len(numeric_cols)
+    color_map = plt.get_cmap('tab20', num_colors)
 
+    # Plotting the statistics
+    plt.figure(figsize=(14, 8))
+    for i, col in enumerate(numeric_cols):
+        plt.plot(df_features['timestamp'], df_features[col], label=col, color=color_map(i))
+
+    plt.xlabel('Time')
+    plt.ylabel('Value')
+    plt.title(f'Statistics for ASN {target_asn}')
+    plt.legend(loc='upper right')
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+    
+    
 def build_routes_as(routes):
     routes_as = {}
     for prefix in routes:
@@ -171,28 +187,6 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
     print(f"Data saved to {output_file}")
 
     return df_features
-
-
-def plot_statistics(df_features, target_asn):
-    numeric_cols = df_features.select_dtypes(include=['number']).columns
-
-    # Define the color map
-    num_colors = len(numeric_cols)
-    color_map = cm.get_cmap('tab20', num_colors)
-
-    # Plotting the statistics
-    plt.figure(figsize=(14, 8))
-    for i, col in enumerate(numeric_cols):
-        plt.plot(df_features['timestamp'], df_features[col], label=col, color=color_map(i))
-
-    plt.xlabel('Time')
-    plt.ylabel('Value')
-    plt.title(f'Statistics for ASN {target_asn}')
-    plt.legend(loc='upper right')
-    plt.grid(True)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
 
 
 def detect_anomalies(df, numeric_cols, threshold_multiplier=2):
