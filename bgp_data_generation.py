@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import get_named_colors_mapping
+import networkx as nx
+import matplotlib.cm as cm
 
 def plot_statistics(df_features, target_asn):
     numeric_cols = df_features.select_dtypes(include=['number']).columns
@@ -56,7 +58,8 @@ def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
         "avg_edit_distance": 0,
         "num_announcements": temp_counts["num_announcements"],
         "num_withdrawals": temp_counts["num_withdrawals"],
-        "num_unique_prefixes_announced": 0
+        "num_unique_prefixes_announced": 0,
+        "unique_prefixes_list": []  # New field to store the list of unique prefixes
     }
 
     routes_as = build_routes_as(routes)
@@ -66,8 +69,11 @@ def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
             num_routes = len(routes_as[target_asn])
             sum_path_length = 0
             sum_edit_distance = 0
+            unique_prefixes = []
 
             for prefix in routes_as[target_asn].keys():
+                unique_prefixes.append(prefix)
+
                 if target_asn in old_routes_as and prefix in old_routes_as[target_asn]:
                     path = routes_as[target_asn][prefix]
                     path_old = old_routes_as[target_asn][prefix]
@@ -95,6 +101,7 @@ def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
             features["num_routes"] = num_routes
             features["avg_path_length"] = sum_path_length / num_routes
             features["avg_edit_distance"] = sum_edit_distance / num_routes
+            features["unique_prefixes_list"] = unique_prefixes
 
         if target_asn in old_routes_as:
             for prefix in old_routes_as[target_asn].keys():
@@ -105,6 +112,7 @@ def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
     features["num_unique_prefixes_announced"] = len(routes_as.get(target_asn, {}))
 
     return features, routes_as
+
 
 def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], output_file='bgp_features.csv'):
     stream = pybgpstream.BGPStream(
@@ -136,14 +144,15 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
             update = elem.fields
             elem_time = datetime.utcfromtimestamp(elem.time)
 
+            # If the time exceeds the 5-minute window, process the window and reset
             if elem_time >= current_window_start + timedelta(minutes=5):
                 features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
                 features['timestamp'] = current_window_start
                 all_features.append(features)
 
-                # Reset for the new window
+                # Move to the next 5-minute window
                 current_window_start += timedelta(minutes=5)
-                routes = {}
+                routes = {}  # Reset the routes for the next window
                 index += 1
                 temp_counts = {
                     "num_announcements": 0,
@@ -162,12 +171,13 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
             if collector not in routes[prefix]:
                 routes[prefix][collector] = {}
 
-            if elem.type == 'A':
-                path = update['as-path'].split()
-                if path[-1] == target_asn:
+            # Processing Announcements (A) and Withdrawals (W)
+            if elem.type == 'A':  # Announcement
+                path = update.get('as-path', "").split()
+                if path and path[-1] == target_asn:
                     routes[prefix][collector][peer_asn] = path
                     temp_counts["num_announcements"] += 1
-            elif elem.type == 'W':
+            elif elem.type == 'W':  # Withdrawal
                 if prefix in routes and collector in routes[prefix]:
                     if peer_asn in routes[prefix][collector]:
                         if routes[prefix][collector][peer_asn][-1] == target_asn:
@@ -177,16 +187,18 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
     print(f"Total records processed: {record_count}")
     print(f"Total elements processed: {element_count}")
 
-    # Final aggregation for the last window
+    # Process the final 5-minute window
     features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
     features['timestamp'] = current_window_start
     all_features.append(features)
 
+    # Convert the collected features into a DataFrame and save it
     df_features = pd.json_normalize(all_features, sep='_').fillna(0)
     df_features.to_csv(output_file, index=False)
     print(f"Data saved to {output_file}")
 
     return df_features
+
 
 
 def detect_anomalies(df, numeric_cols, threshold_multiplier=2):
@@ -237,3 +249,167 @@ def detect_anomalies_new(df, numeric_cols, threshold_multiplier=2):
             df.at[idx, 'anomaly_status'] = f"Anomaly detected at {timestamp} due to the following deviations: {', '.join(reasons)}"
     
     return df
+
+def buildGraph(routes):
+    G = nx.Graph()
+    edges = set()
+
+    for prefix in routes.keys():
+        for collector in routes[prefix].keys():
+            for peer in routes[prefix][collector].keys():
+                path = routes[prefix][collector][peer]
+                if path is not None:
+                    path_vertices = path.split(" ")
+                    for i in range(len(path_vertices) - 1):
+                        a, b = path_vertices[i], path_vertices[i + 1]
+                        if a != b:
+                            edges.add((a, b))
+
+    G.add_edges_from(edges)
+    return G
+
+def extract_bgp_data_and_build_weighted_graph(target_asn, from_time, until_time, collectors=['rrc00'], output_file=None):
+    stream = pybgpstream.BGPStream(
+        from_time=from_time,
+        until_time=until_time,
+        record_type="updates",
+        collectors=collectors
+    )
+
+    routes = {}
+    current_window_start = datetime.strptime(from_time, "%Y-%m-%d %H:%M:%S")
+    index = 0
+
+    record_count = 0
+    element_count = 0
+
+    print(f"Starting data collection from {from_time} to {until_time} for collectors {collectors}")
+
+    for rec in stream.records():
+        record_count += 1
+        for elem in rec:
+            element_count += 1
+            update = elem.fields
+            elem_time = datetime.utcfromtimestamp(elem.time)
+            # If time exceeds the 5-minute window, process the window and reset
+            if elem_time >= current_window_start + timedelta(minutes=5):
+                current_window_start += timedelta(minutes=5)
+                # Reset routes here would lose paths, so we remove the reset!
+                index += 1
+
+            prefix = update.get("prefix")
+            if prefix is None:
+                continue
+
+            peer_asn = update.get("peer_asn", "unknown")
+            collector = rec.collector
+
+            if prefix not in routes:
+                routes[prefix] = {}
+            if collector not in routes[prefix]:
+                routes[prefix][collector] = {}
+
+            # Process announcements and withdrawals
+            if elem.type == 'A':  # Announcement
+                # print(f"Processing announcement for prefix {prefix}")
+                as_path = update.get('as-path')
+                if as_path:
+                    # print(f"Raw as-path for prefix {prefix}: {as_path}")
+                    path = as_path.split()
+                    if path and path[-1] == target_asn:
+                        if peer_asn not in routes[prefix][collector]:
+                            routes[prefix][collector][peer_asn] = path  # Store the path correctly here
+                            # print(f"Added path to routes: {path}")
+                else:
+                    print(f"No as-path found for prefix {prefix}")
+            elif elem.type == 'W':  # Withdrawal
+                # print(f"Processing withdrawal for prefix {prefix}")
+                if prefix in routes and collector in routes[prefix]:
+                    if peer_asn in routes[prefix][collector]:
+                        if routes[prefix][collector][peer_asn][-1] == target_asn:
+                            routes[prefix][collector].pop(peer_asn, None)
+
+    print(f"Total records processed: {record_count}")
+    print(f"Total elements processed: {element_count}")
+
+    # Build the weighted graph from the extracted routes
+    G = buildWeightedGraph(routes)
+
+    return G
+
+
+def buildWeightedGraph(routes):
+    graph = nx.Graph()
+    
+    for prefix in routes.keys():        
+        nbIp = 1  # You can update this to compute the actual number of IPs if required
+        origins = []
+        vertices = []
+        edges = []
+        
+        for collector in routes[prefix].keys():
+            for peer in routes[prefix][collector].keys():
+                path = routes[prefix][collector][peer]
+                path_vertices = []
+                path_edges = []
+                path_origin = ""
+
+                if path is not None:
+                    if "{" in path or "}" in path:
+                        print("    Skipping path with {}")
+                        pass
+                    else:
+                        path_vertices = path
+                        path_origin = path_vertices[-1]
+                        for i in range(len(path_vertices) - 1):
+                            path_edges.append([path_vertices[i], path_vertices[i + 1]])
+                        if path_origin not in origins:
+                            origins.append(path_origin)
+
+                        for vertex in path_vertices:
+                            if vertex not in vertices:
+                                vertices.append(vertex)
+
+                        for edge in path_edges:
+                            if edge not in edges:
+                                edges.append(edge)
+        
+        for vertex in vertices:
+            if not graph.has_node(vertex):
+                graph.add_node(vertex, nbIp=0)
+
+        for (a, b) in edges:
+            if not graph.has_edge(a, b):
+                graph.add_edge(a, b, nbIp=0)
+            graph[a][b]["nbIp"] += nbIp
+
+        for origin in origins:
+            graph.nodes[origin]["nbIp"] += nbIp
+
+    print(f"Graph construction complete with {graph.number_of_nodes()} nodes and {graph.number_of_edges()} edges.")
+    
+    return graph
+
+
+
+# Function to plot the weighted graph
+def plot_weighted_graph(G, title="BGP Weighted Route Graph"):
+    plt.figure(figsize=(12, 10))
+    
+    # Use spring layout for better visualization
+    pos = nx.spring_layout(G)
+    
+    # Draw nodes
+    nx.draw_networkx_nodes(G, pos, node_size=500, node_color="skyblue", alpha=0.8)
+    
+    # Draw edges with weights
+    edge_weights = [G[u][v]['nbIp'] for u, v in G.edges()]
+    nx.draw_networkx_edges(G, pos, edgelist=G.edges(), width=edge_weights, edge_color="gray", alpha=0.7)
+    
+    # Draw node labels
+    nx.draw_networkx_labels(G, pos, font_size=10, font_family="sans-serif")
+    
+    # Set the title and display the graph
+    plt.title(title)
+    plt.axis("off")
+    plt.show()
