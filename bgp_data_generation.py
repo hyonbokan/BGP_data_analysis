@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import get_named_colors_mapping
 import networkx as nx
 import matplotlib.cm as cm
+import numpy as np
 
 def plot_statistics(df_features, target_asn):
     numeric_cols = df_features.select_dtypes(include=['number']).columns
@@ -391,25 +392,38 @@ def buildWeightedGraph(routes):
     return graph
 
 
-
-# Function to plot the weighted graph
 def plot_weighted_graph(G, title="BGP Weighted Route Graph"):
     plt.figure(figsize=(12, 10))
-    
+
     # Use spring layout for better visualization
-    pos = nx.spring_layout(G)
+    pos = nx.spring_layout(G, seed=42)  # Adding seed for consistent layouts across runs
+    
+    # Normalize edge weights to make them visually clearer
+    edge_weights = np.array([G[u][v]['nbIp'] for u, v in G.edges()])
+    max_weight = max(edge_weights) if len(edge_weights) > 0 else 1  # Prevent division by zero
+    min_weight = min(edge_weights) if len(edge_weights) > 0 else 0
+    normalized_weights = [(0.5 + (weight - min_weight) / (max_weight - min_weight)) * 5 
+                          for weight in edge_weights]  # Scale weights between 0.5 and 5 for visualization
     
     # Draw nodes
-    nx.draw_networkx_nodes(G, pos, node_size=500, node_color="skyblue", alpha=0.8)
+    nx.draw_networkx_nodes(G, pos, node_size=700, node_color="lightblue", edgecolors='black', linewidths=0.5, alpha=0.9)
     
-    # Draw edges with weights
-    edge_weights = [G[u][v]['nbIp'] for u, v in G.edges()]
-    nx.draw_networkx_edges(G, pos, edgelist=G.edges(), width=edge_weights, edge_color="gray", alpha=0.7)
+    # Draw edges with varying thickness
+    edges = nx.draw_networkx_edges(
+        G, pos, edgelist=G.edges(), width=normalized_weights, edge_color=edge_weights, edge_cmap=plt.cm.Blues, alpha=0.7
+    )
     
     # Draw node labels
     nx.draw_networkx_labels(G, pos, font_size=10, font_family="sans-serif")
     
+    # Add a color bar to represent edge weight intensities
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.Blues, norm=plt.Normalize(vmin=min_weight, vmax=max_weight))
+    sm.set_array([])  # This line is important to properly map the colors
+    cbar = plt.colorbar(sm, ax=plt.gca())  # Attach the colorbar to the current axes
+    cbar.set_label('Edge Weight (nbIp)', rotation=270, labelpad=15)
+    
     # Set the title and display the graph
-    plt.title(title)
+    plt.title(title, fontsize=14)
     plt.axis("off")
+    plt.tight_layout()
     plt.show()
