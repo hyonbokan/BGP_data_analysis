@@ -7,6 +7,7 @@ from matplotlib.colors import get_named_colors_mapping
 import networkx as nx
 import matplotlib.cm as cm
 import numpy as np
+import csv
 
 def plot_statistics(df_features, target_asn):
     numeric_cols = df_features.select_dtypes(include=['number']).columns
@@ -278,6 +279,7 @@ def extract_bgp_data_and_build_weighted_graph(target_asn, from_time, until_time,
     )
 
     routes = {}
+    all_data = []
     current_window_start = datetime.strptime(from_time, "%Y-%m-%d %H:%M:%S")
     index = 0
 
@@ -292,6 +294,7 @@ def extract_bgp_data_and_build_weighted_graph(target_asn, from_time, until_time,
             element_count += 1
             update = elem.fields
             elem_time = datetime.utcfromtimestamp(elem.time)
+
             # If time exceeds the 5-minute window, process the window and reset
             if elem_time >= current_window_start + timedelta(minutes=5):
                 current_window_start += timedelta(minutes=5)
@@ -311,20 +314,23 @@ def extract_bgp_data_and_build_weighted_graph(target_asn, from_time, until_time,
                 routes[prefix][collector] = {}
 
             # Process announcements and withdrawals
-            if elem.type == 'A':  # Announcement
-                # print(f"Processing announcement for prefix {prefix}")
+            if elem.type == 'A':
                 as_path = update.get('as-path')
                 if as_path:
-                    # print(f"Raw as-path for prefix {prefix}: {as_path}")
                     path = as_path.split()
                     if path and path[-1] == target_asn:
                         if peer_asn not in routes[prefix][collector]:
                             routes[prefix][collector][peer_asn] = path  # Store the path correctly here
-                            # print(f"Added path to routes: {path}")
+                            all_data.append({
+                                'timestamp': elem_time,
+                                'prefix': prefix,
+                                'collector': collector,
+                                'peer_asn': peer_asn,
+                                'as_path': ' '.join(path)
+                            })
                 else:
                     print(f"No as-path found for prefix {prefix}")
             elif elem.type == 'W':  # Withdrawal
-                # print(f"Processing withdrawal for prefix {prefix}")
                 if prefix in routes and collector in routes[prefix]:
                     if peer_asn in routes[prefix][collector]:
                         if routes[prefix][collector][peer_asn][-1] == target_asn:
@@ -333,11 +339,22 @@ def extract_bgp_data_and_build_weighted_graph(target_asn, from_time, until_time,
     print(f"Total records processed: {record_count}")
     print(f"Total elements processed: {element_count}")
 
+    # Optionally save data to CSV
+    if output_file:
+        with open(output_file, 'w', newline='') as csvfile:
+            fieldnames = ['timestamp', 'prefix', 'collector', 'peer_asn', 'as_path']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+            writer.writeheader()
+            for row in all_data:
+                writer.writerow(row)
+        
+        print(f"Data saved to {output_file}")
+
     # Build the weighted graph from the extracted routes
     G = buildWeightedGraph(routes)
 
     return G
-
 
 def buildWeightedGraph(routes):
     graph = nx.Graph()
@@ -395,34 +412,26 @@ def buildWeightedGraph(routes):
 def plot_weighted_graph(G, title="BGP Weighted Route Graph"):
     plt.figure(figsize=(12, 10))
 
-    # Use spring layout for better visualization
-    pos = nx.spring_layout(G, seed=42)  # Adding seed for consistent layouts across runs
+    pos = nx.spring_layout(G, seed=42)
     
-    # Normalize edge weights to make them visually clearer
     edge_weights = np.array([G[u][v]['nbIp'] for u, v in G.edges()])
-    max_weight = max(edge_weights) if len(edge_weights) > 0 else 1  # Prevent division by zero
+    max_weight = max(edge_weights) if len(edge_weights) > 0 else 1
     min_weight = min(edge_weights) if len(edge_weights) > 0 else 0
     normalized_weights = [(0.5 + (weight - min_weight) / (max_weight - min_weight)) * 5 
-                          for weight in edge_weights]  # Scale weights between 0.5 and 5 for visualization
+                          for weight in edge_weights]
     
-    # Draw nodes
     nx.draw_networkx_nodes(G, pos, node_size=700, node_color="lightblue", edgecolors='black', linewidths=0.5, alpha=0.9)
     
-    # Draw edges with varying thickness
     edges = nx.draw_networkx_edges(
         G, pos, edgelist=G.edges(), width=normalized_weights, edge_color=edge_weights, edge_cmap=plt.cm.Blues, alpha=0.7
     )
     
-    # Draw node labels
     nx.draw_networkx_labels(G, pos, font_size=10, font_family="sans-serif")
-    
-    # Add a color bar to represent edge weight intensities
     sm = plt.cm.ScalarMappable(cmap=plt.cm.Blues, norm=plt.Normalize(vmin=min_weight, vmax=max_weight))
     sm.set_array([])  # This line is important to properly map the colors
-    cbar = plt.colorbar(sm, ax=plt.gca())  # Attach the colorbar to the current axes
+    cbar = plt.colorbar(sm, ax=plt.gca())
     cbar.set_label('Edge Weight (nbIp)', rotation=270, labelpad=15)
     
-    # Set the title and display the graph
     plt.title(title, fontsize=14)
     plt.axis("off")
     plt.tight_layout()
