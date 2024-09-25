@@ -31,17 +31,22 @@ Visit [PyBGPStream Installation Guide](https://bgpstream.caida.org/docs/install/
     This notebook is designed for extracting detailed features from BGP data per Autonomous System Number (ASN), which can be utilized for machine learning or Large Language Model training. The script processes BGP data to calculate and extract various statistics and features.
 
     **Extracted Features Include**:
-    - **Timestamp**: Time of the BGP update.
-    - **ASN (Autonomous System Number)**: The target ASN for which features are being extracted.
-    - **Number of Routes**: Total number of active routes observed.
-    - **Number of New Routes**: Number of new routes added.
-    - **Number of Withdrawals**: Total route withdrawals observed.
-    - **Number of Origin Changes**: Changes in the origin ASN of routes.
-    - **Number of Route Changes**: Changes in the routing paths.
-    - **Maximum Path Length**: The longest AS path observed.
-    - **Average Path Length**: The average length of AS paths.
-    - **Maximum Edit Distance**: Maximum edit distance observed in AS paths from one update to the next.
-    - **Average Edit Distance**: Average edit distance across all updates.
-    - **Number of Announcements**: Total BGP announcements observed.
-    - **Number of Unique Prefixes Announced**: Number of unique IP prefixes announced.
+    - **Timestamp**: The time when the BGP update was recorded.
+    - **Autonomous System Number (ASN)**: The target ASN for which the features are being analyzed.
+    - **Total Routes**: The total number of active routes observed for the target ASN.
+    - **New Routes**: The number of new routes added in the current observation window.
+    - **Withdrawals**: The total number of route withdrawals observed.
+    - **Origin Changes**: The count of changes in the origin ASN of routes.
+    - **Route Changes**: The total changes observed in routing paths for the target ASN.
+    - **Maximum Path Length**: The longest AS path observed in the BGP data.
+    - **Average Path Length**: The average length of AS paths observed during the collection window.
+    - **Maximum Edit Distance**: The highest edit distance between AS paths compared to previous updates.
+    - **Average Edit Distance**: The average edit distance observed across all AS paths in the current window.
+    - **Announcements**: The total number of BGP announcements received for the target ASN.
+    - **Unique Prefixes Announced**: The number of unique IP prefixes announced by the target ASN.
+    - **Graph Average Degree**: The average degree of nodes in the constructed AS path graph.
+    - **Graph Betweenness Centrality**: The average betweenness centrality of nodes in the AS path graph, indicating the importance of nodes in the shortest paths between other nodes.
+    - **Graph Closeness Centrality**: The average closeness centrality of nodes in the AS path graph, representing how close each node is to all other nodes in the graph.
+    - **Graph Eigenvector Centrality**: The average eigenvector centrality of nodes in the AS path graph, indicating the influence or importance of nodes within the network.
 
+ 

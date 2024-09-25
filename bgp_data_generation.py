@@ -19,7 +19,7 @@ def plot_statistics(df_features, target_asn):
     # Plotting the statistics
     plt.figure(figsize=(14, 8))
     for i, col in enumerate(numeric_cols):
-        plt.plot(df_features['timestamp'], df_features[col], label=col, color=color_map(i))
+        plt.plot(df_features['Timestamp'], df_features[col], label=col, color=color_map(i))
 
     plt.xlabel('Time')
     plt.ylabel('Value')
@@ -47,71 +47,67 @@ def build_routes_as(routes):
 
 def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
     features = {
-        "timestamp": None,
-        "asn": target_asn,
-        "num_routes": 0,
-        "num_new_routes": 0,
-        "num_withdrawals": 0,
-        "num_origin_changes": 0,
-        "num_route_changes": 0,
-        "max_path_length": 0,
-        "avg_path_length": 0,
-        "max_edit_distance": 0,
-        "avg_edit_distance": 0,
-        "num_announcements": temp_counts["num_announcements"],
-        "num_withdrawals": temp_counts["num_withdrawals"],
-        "num_unique_prefixes_announced": 0,
-        "unique_prefixes_list": []  # New field to store the list of unique prefixes
+        "Timestamp": None,
+        "Autonomous System Number": target_asn,
+        "Total Routes": 0,
+        "New Routes": temp_counts["num_new_routes"],
+        "Withdrawals": temp_counts["num_withdrawals"],
+        "Origin Changes": temp_counts["num_origin_changes"],
+        "Route Changes": temp_counts["num_route_changes"],
+        "Maximum Path Length": 0,
+        "Average Path Length": 0,
+        "Maximum Edit Distance": 0,
+        "Average Edit Distance": 0,
+        "Announcements": temp_counts["num_announcements"],
+        "Unique Prefixes Announced": 0,
+        "Graph Average Degree": 0,
+        "Graph Betweenness Centrality": 0,
+        "Graph Closeness Centrality": 0,
+        "Graph Eigenvector Centrality": 0
     }
 
     routes_as = build_routes_as(routes)
 
-    if index > 0:
-        if target_asn in routes_as:
-            num_routes = len(routes_as[target_asn])
-            sum_path_length = 0
-            sum_edit_distance = 0
-            unique_prefixes = []
+    if index > 0 and target_asn in routes_as:
+        num_routes = len(routes_as[target_asn])
+        sum_path_length = 0
+        sum_edit_distance = 0
 
-            for prefix in routes_as[target_asn].keys():
-                unique_prefixes.append(prefix)
+        # Build the graph for the current ASN
+        G = nx.Graph()
+        for prefix, path in routes_as[target_asn].items():
+            for i in range(len(path) - 1):
+                G.add_edge(path[i], path[i + 1])
 
-                if target_asn in old_routes_as and prefix in old_routes_as[target_asn]:
-                    path = routes_as[target_asn][prefix]
-                    path_old = old_routes_as[target_asn][prefix]
+        # Calculate graph features if the graph has nodes
+        if G.number_of_nodes() > 0:
+            features["Graph Average Degree"] = sum(dict(G.degree).values()) / G.number_of_nodes()
+            features["Graph Betweenness Centrality"] = sum(nx.betweenness_centrality(G).values()) / G.number_of_nodes()
+            features["Graph Closeness Centrality"] = sum(nx.closeness_centrality(G).values()) / G.number_of_nodes()
+            features["Graph Eigenvector Centrality"] = sum(nx.eigenvector_centrality(G).values()) / G.number_of_nodes()
 
-                    if path != path_old:
-                        features["num_route_changes"] += 1
+        for prefix in routes_as[target_asn].keys():
+            path = routes_as[target_asn][prefix]
+            if target_asn in old_routes_as and prefix in old_routes_as[target_asn]:
+                path_old = old_routes_as[target_asn][prefix]
 
-                    if path[-1] != path_old[-1]:
-                        features["num_origin_changes"] += 1
+                if path != path_old:
+                    features["Route Changes"] += 1  # Already counted in temp_counts
+                if path[-1] != path_old[-1]:
+                    features["Origin Changes"] += 1  # Already counted in temp_counts
 
-                    path_length = len(path)
-                    path_old_length = len(path_old)
+                path_length = len(path)
+                sum_path_length += path_length
+                edist = editdistance.eval(path, path_old)
+                sum_edit_distance += edist
+                features["Maximum Path Length"] = max(features["Maximum Path Length"], path_length)
+                features["Maximum Edit Distance"] = max(features["Maximum Edit Distance"], edist)
 
-                    sum_path_length += path_length
-                    if path_length > features["max_path_length"]:
-                        features["max_path_length"] = path_length
+        features["Total Routes"] = num_routes
+        features["Average Path Length"] = sum_path_length / num_routes if num_routes else 0
+        features["Average Edit Distance"] = sum_edit_distance / num_routes if num_routes else 0
 
-                    edist = editdistance.eval(path, path_old)
-                    sum_edit_distance += edist
-                    if edist > features["max_edit_distance"]:
-                        features["max_edit_distance"] = edist
-                else:
-                    features["num_new_routes"] += 1
-
-            features["num_routes"] = num_routes
-            features["avg_path_length"] = sum_path_length / num_routes
-            features["avg_edit_distance"] = sum_edit_distance / num_routes
-            features["unique_prefixes_list"] = unique_prefixes
-
-        if target_asn in old_routes_as:
-            for prefix in old_routes_as[target_asn].keys():
-                if not (target_asn in routes_as and prefix in routes_as[target_asn]):
-                    features["num_withdrawals"] += 1
-
-    # Add the number of unique prefixes announced
-    features["num_unique_prefixes_announced"] = len(routes_as.get(target_asn, {}))
+    features["Unique Prefixes Announced"] = len(routes_as.get(target_asn, {}))
 
     return features, routes_as
 
@@ -133,7 +129,10 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
     # Initialize temporary counts for announcements and withdrawals
     temp_counts = {
         "num_announcements": 0,
-        "num_withdrawals": 0
+        "num_withdrawals": 0,
+        "num_new_routes": 0,
+        "num_origin_changes": 0,
+        "num_route_changes": 0
     }
 
     record_count = 0
@@ -149,7 +148,7 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
             # If the time exceeds the 5-minute window, process the window and reset
             if elem_time >= current_window_start + timedelta(minutes=5):
                 features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
-                features['timestamp'] = current_window_start
+                features['Timestamp'] = current_window_start
                 all_features.append(features)
 
                 # Move to the next 5-minute window
@@ -158,7 +157,10 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
                 index += 1
                 temp_counts = {
                     "num_announcements": 0,
-                    "num_withdrawals": 0
+                    "num_withdrawals": 0,
+                    "num_new_routes": 0,
+                    "num_origin_changes": 0,
+                    "num_route_changes": 0
                 }
 
             prefix = update.get("prefix")
@@ -177,8 +179,17 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
             if elem.type == 'A':  # Announcement
                 path = update.get('as-path', "").split()
                 if path and path[-1] == target_asn:
+                    if prefix not in routes:
+                        temp_counts["num_new_routes"] += 1  # Mark this as a new route
+                    if target_asn in old_routes_as and prefix in old_routes_as.get(target_asn, {}):
+                        if path != old_routes_as[target_asn][prefix]:
+                            temp_counts["num_route_changes"] += 1
+                        if path[-1] != old_routes_as[target_asn][prefix][-1]:
+                            temp_counts["num_origin_changes"] += 1
+
                     routes[prefix][collector][peer_asn] = path
                     temp_counts["num_announcements"] += 1
+
             elif elem.type == 'W':  # Withdrawal
                 if prefix in routes and collector in routes[prefix]:
                     if peer_asn in routes[prefix][collector]:
@@ -191,7 +202,7 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
 
     # Process the final 5-minute window
     features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
-    features['timestamp'] = current_window_start
+    features['Timestamp'] = current_window_start
     all_features.append(features)
 
     # Convert the collected features into a DataFrame and save it
@@ -200,7 +211,6 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
     print(f"Data saved to {output_file}")
 
     return df_features
-
 
 
 def detect_anomalies(df, numeric_cols, threshold_multiplier=2):
@@ -251,24 +261,6 @@ def detect_anomalies_new(df, numeric_cols, threshold_multiplier=2):
             df.at[idx, 'anomaly_status'] = f"Anomaly detected at {timestamp} due to the following deviations: {', '.join(reasons)}"
     
     return df
-
-def buildGraph(routes):
-    G = nx.Graph()
-    edges = set()
-
-    for prefix in routes.keys():
-        for collector in routes[prefix].keys():
-            for peer in routes[prefix][collector].keys():
-                path = routes[prefix][collector][peer]
-                if path is not None:
-                    path_vertices = path.split(" ")
-                    for i in range(len(path_vertices) - 1):
-                        a, b = path_vertices[i], path_vertices[i + 1]
-                        if a != b:
-                            edges.add((a, b))
-
-    G.add_edges_from(edges)
-    return G
 
 def extract_bgp_data_and_build_weighted_graph(target_asn, from_time, until_time, collectors=['rrc00'], output_file=None):
     stream = pybgpstream.BGPStream(
