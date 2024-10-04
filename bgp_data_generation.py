@@ -3,11 +3,12 @@ import editdistance
 from datetime import datetime, timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.colors import get_named_colors_mapping
 import networkx as nx
-import matplotlib.cm as cm
 import numpy as np
 import csv
+from collections import defaultdict
+import ipaddress
+
 
 def plot_statistics(df_features, target_asn):
     numeric_cols = df_features.select_dtypes(include=['number']).columns
@@ -45,30 +46,106 @@ def build_routes_as(routes):
                 routes_as[asn][prefix] = path
     return routes_as
 
-def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
+def is_bogon_prefix(prefix):
+    # List of bogon prefixes for IPv4
+    bogon_ipv4_prefixes = [
+        '0.0.0.0/8',
+        '10.0.0.0/8',
+        '100.64.0.0/10',
+        '127.0.0.0/8',
+        '169.254.0.0/16',
+        '172.16.0.0/12',
+        '192.0.0.0/24',
+        '192.0.2.0/24',
+        '192.168.0.0/16',
+        '198.18.0.0/15',
+        '198.51.100.0/24',
+        '203.0.113.0/24',
+        '224.0.0.0/4',
+        '240.0.0.0/4'
+    ]
+
+    # List of bogon prefixes for IPv6
+    bogon_ipv6_prefixes = [
+        '::/128',           # Unspecified address
+        '::1/128',          # Loopback address
+        '::ffff:0:0/96',    # IPv4-mapped addresses
+        '64:ff9b::/96',     # IPv4/IPv6 translation
+        '100::/64',         # Discard prefix
+        '2001:db8::/32',    # Documentation prefix
+        'fc00::/7',         # Unique local addresses
+        'fe80::/10',        # Link-local addresses
+        'ff00::/8',         # Multicast addresses
+        # Add more bogon IPv6 prefixes as needed
+    ]
+
+    try:
+        network = ipaddress.ip_network(prefix, strict=False)
+        if network.version == 4:
+            for bogon in bogon_ipv4_prefixes:
+                bogon_network = ipaddress.ip_network(bogon)
+                if network.overlaps(bogon_network):
+                    return True
+        elif network.version == 6:
+            for bogon in bogon_ipv6_prefixes:
+                bogon_network = ipaddress.ip_network(bogon)
+                if network.overlaps(bogon_network):
+                    return True
+        else:
+            # Unknown IP version, consider as non-bogon
+            return False
+    except ValueError:
+        # Invalid IP address format
+        return False
+    return False
+
+
+def extract_features(index, routes, old_routes_as, target_asn, prefix_lengths, med_values, local_prefs, communities_per_prefix, peer_updates):
     features = {
         "Timestamp": None,
         "Autonomous System Number": target_asn,
         "Total Routes": 0,
-        "New Routes": temp_counts["num_new_routes"],
-        "Withdrawals": temp_counts["num_withdrawals"],
-        "Origin Changes": temp_counts["num_origin_changes"],
-        "Route Changes": temp_counts["num_route_changes"],
+        "New Routes": 0,
+        "Withdrawals": 0,
+        "Origin Changes": 0,
+        "Route Changes": 0,
         "Maximum Path Length": 0,
         "Average Path Length": 0,
         "Maximum Edit Distance": 0,
         "Average Edit Distance": 0,
-        "Announcements": temp_counts["num_announcements"],
+        "Announcements": 0,
         "Unique Prefixes Announced": 0,
         "Graph Average Degree": 0,
         "Graph Betweenness Centrality": 0,
         "Graph Closeness Centrality": 0,
-        "Graph Eigenvector Centrality": 0
+        "Graph Eigenvector Centrality": 0,
+        # New features
+        "Average MED": 0,
+        "Average Local Preference": 0,
+        "Total Communities": 0,
+        "Unique Communities": 0,
+        "Updates per Peer": peer_updates,
+        "Number of Unique Peers": len(peer_updates),
+        "Prefixes Announced": [],
+        "Prefixes Withdrawn": [],
+        "Prefixes with AS Path Prepending": 0,
+        "Bogon Prefixes Detected": 0,
+        "Average Prefix Length": 0,
+        "Max Prefix Length": 0,
+        "Min Prefix Length": 0
     }
+
+    # Set counts for withdrawals, announcements, prefixes announced/withdrawn, bogon prefixes
+    features["Withdrawals"] = temp_counts["num_withdrawals"]
+    features["Announcements"] = temp_counts["num_announcements"]
+    features["Prefixes Announced"] = temp_counts["prefixes_announced"]
+    features["Prefixes Withdrawn"] = temp_counts["prefixes_withdrawn"]
+    features["Bogon Prefixes Detected"] = temp_counts["bogon_prefixes"]
+    features["Prefixes with AS Path Prepending"] = temp_counts["as_path_prepending"]
 
     routes_as = build_routes_as(routes)
 
-    if index > 0 and target_asn in routes_as:
+    if index >= 0 and target_asn in routes_as:
         num_routes = len(routes_as[target_asn])
         sum_path_length = 0
         sum_edit_distance = 0
@@ -84,7 +161,16 @@ def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
             features["Graph Average Degree"] = sum(dict(G.degree).values()) / G.number_of_nodes()
             features["Graph Betweenness Centrality"] = sum(nx.betweenness_centrality(G).values()) / G.number_of_nodes()
             features["Graph Closeness Centrality"] = sum(nx.closeness_centrality(G).values()) / G.number_of_nodes()
-            features["Graph Eigenvector Centrality"] = sum(nx.eigenvector_centrality(G).values()) / G.number_of_nodes()
+            try:
+                eigenvector_centrality = nx.eigenvector_centrality(G, max_iter=1000)
+                features["Graph Eigenvector Centrality"] = sum(eigenvector_centrality.values()) / G.number_of_nodes()
+            except nx.PowerIterationFailedConvergence:
+                features["Graph Eigenvector Centrality"] = 0
+
+        # Initialize counts
+        new_routes = 0
+        route_changes = 0
+        origin_changes = 0
 
         for prefix in routes_as[target_asn].keys():
             path = routes_as[target_asn][prefix]
@@ -92,9 +178,9 @@ def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
                 path_old = old_routes_as[target_asn][prefix]
 
                 if path != path_old:
-                    features["Route Changes"] += 1  # Already counted in temp_counts
+                    route_changes += 1
                 if path[-1] != path_old[-1]:
-                    features["Origin Changes"] += 1  # Already counted in temp_counts
+                    origin_changes += 1
 
                 path_length = len(path)
                 sum_path_length += path_length
@@ -102,15 +188,39 @@ def extract_features(index, routes, old_routes_as, target_asn, temp_counts):
                 sum_edit_distance += edist
                 features["Maximum Path Length"] = max(features["Maximum Path Length"], path_length)
                 features["Maximum Edit Distance"] = max(features["Maximum Edit Distance"], edist)
+            else:
+                new_routes += 1  # This is a new route
+                path_length = len(path)
+                sum_path_length += path_length
+                # No edit distance to calculate for new routes
+                features["Maximum Path Length"] = max(features["Maximum Path Length"], path_length)
 
+        features["New Routes"] = new_routes
+        features["Route Changes"] = route_changes
+        features["Origin Changes"] = origin_changes
+
+        num_routes_total = num_routes if num_routes else 1  # Avoid division by zero
         features["Total Routes"] = num_routes
-        features["Average Path Length"] = sum_path_length / num_routes if num_routes else 0
-        features["Average Edit Distance"] = sum_edit_distance / num_routes if num_routes else 0
+        features["Average Path Length"] = sum_path_length / num_routes_total
+        features["Average Edit Distance"] = sum_edit_distance / route_changes if route_changes else 0
+
+        # Calculate average MED and Local Preference
+        features["Average MED"] = sum(med_values) / len(med_values) if med_values else 0
+        features["Average Local Preference"] = sum(local_prefs) / len(local_prefs) if local_prefs else 0
+
+        # Calculate community metrics
+        features["Total Communities"] = temp_counts["total_communities"]
+        features["Unique Communities"] = len(temp_counts["unique_communities"])
+
+        # Prefix length statistics
+        if prefix_lengths:
+            features["Average Prefix Length"] = sum(prefix_lengths) / len(prefix_lengths)
+            features["Max Prefix Length"] = max(prefix_lengths)
+            features["Min Prefix Length"] = min(prefix_lengths)
 
     features["Unique Prefixes Announced"] = len(routes_as.get(target_asn, {}))
 
     return features, routes_as
-
 
 def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], output_file='bgp_features.csv'):
     stream = pybgpstream.BGPStream(
@@ -126,14 +236,26 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
     current_window_start = datetime.strptime(from_time, "%Y-%m-%d %H:%M:%S")
     index = 0
 
+    global temp_counts  # Declare temp_counts as global to access in extract_features
+
     # Initialize temporary counts for announcements and withdrawals
     temp_counts = {
         "num_announcements": 0,
         "num_withdrawals": 0,
-        "num_new_routes": 0,
-        "num_origin_changes": 0,
-        "num_route_changes": 0
+        "prefixes_announced": [],
+        "prefixes_withdrawn": [],
+        "as_path_prepending": 0,
+        "bogon_prefixes": 0,
+        "total_communities": 0,
+        "unique_communities": set()
     }
+
+    # Additional data collections
+    prefix_lengths = []
+    med_values = []
+    local_prefs = []
+    communities_per_prefix = {}
+    peer_updates = defaultdict(int)
 
     record_count = 0
     element_count = 0
@@ -147,7 +269,10 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
 
             # If the time exceeds the 5-minute window, process the window and reset
             if elem_time >= current_window_start + timedelta(minutes=5):
-                features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
+                features, old_routes_as = extract_features(
+                    index, routes, old_routes_as, target_asn,
+                    prefix_lengths, med_values, local_prefs, communities_per_prefix, peer_updates
+                )
                 features['Timestamp'] = current_window_start
                 all_features.append(features)
 
@@ -155,40 +280,92 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
                 current_window_start += timedelta(minutes=5)
                 routes = {}  # Reset the routes for the next window
                 index += 1
+
+                # Reset temporary counts and data collections
                 temp_counts = {
                     "num_announcements": 0,
                     "num_withdrawals": 0,
-                    "num_new_routes": 0,
-                    "num_origin_changes": 0,
-                    "num_route_changes": 0
+                    "prefixes_announced": [],
+                    "prefixes_withdrawn": [],
+                    "as_path_prepending": 0,
+                    "bogon_prefixes": 0,
+                    "total_communities": 0,
+                    "unique_communities": set()
                 }
+                prefix_lengths = []
+                med_values = []
+                local_prefs = []
+                communities_per_prefix = {}
+                peer_updates = defaultdict(int)
 
             prefix = update.get("prefix")
             if prefix is None:
                 continue
 
-            peer_asn = update.get("peer_asn", "unknown")
+            # Collect prefix length
+            try:
+                network = ipaddress.ip_network(prefix, strict=False)
+                prefix_length = network.prefixlen
+            except ValueError:
+                prefix_length = None  # Handle invalid prefix format
+                continue  # Skip this prefix if invalid
+            prefix_lengths.append(prefix_length)
+
+            # Check for bogon prefixes
+            if is_bogon_prefix(prefix):
+                temp_counts["bogon_prefixes"] += 1
+
+            peer_asn = elem.peer_asn
             collector = rec.collector
 
-            if prefix not in routes:
-                routes[prefix] = {}
-            if collector not in routes[prefix]:
-                routes[prefix][collector] = {}
+            # Count updates per peer
+            peer_updates[peer_asn] += 1
 
             # Processing Announcements (A) and Withdrawals (W)
             if elem.type == 'A':  # Announcement
                 path = update.get('as-path', "").split()
                 if path and path[-1] == target_asn:
+                    temp_counts["num_announcements"] += 1
+                    temp_counts["prefixes_announced"].append(prefix)
+
+                    # Initialize routes after checking for new routes
                     if prefix not in routes:
-                        temp_counts["num_new_routes"] += 1  # Mark this as a new route
-                    if target_asn in old_routes_as and prefix in old_routes_as.get(target_asn, {}):
-                        if path != old_routes_as[target_asn][prefix]:
-                            temp_counts["num_route_changes"] += 1
-                        if path[-1] != old_routes_as[target_asn][prefix][-1]:
-                            temp_counts["num_origin_changes"] += 1
+                        routes[prefix] = {}
+                    if collector not in routes[prefix]:
+                        routes[prefix][collector] = {}
 
                     routes[prefix][collector][peer_asn] = path
-                    temp_counts["num_announcements"] += 1
+
+                    # Collect MED and Local Preference
+                    med = update.get('med')
+                    if med is not None:
+                        try:
+                            med_values.append(int(med))
+                        except ValueError:
+                            pass  # Handle non-integer MED values
+                    local_pref = update.get('local-pref')
+                    if local_pref is not None:
+                        try:
+                            local_prefs.append(int(local_pref))
+                        except ValueError:
+                            pass  # Handle non-integer Local Preference values
+
+                    # Collect Communities
+                    communities = update.get('communities', [])
+                    if communities:
+                        temp_counts["total_communities"] += len(communities)
+                        temp_counts["unique_communities"].update(communities)
+                        communities_per_prefix[prefix] = communities
+
+                    # Check for AS Path Prepending
+                    # Clean the AS path to handle AS sets and confederations
+                    clean_path = []
+                    for asn in path:
+                        if '{' in asn or '(' in asn:
+                            continue  # Skip AS sets and confederations
+                        clean_path.append(asn)
+                    if len(set(clean_path)) < len(clean_path):
+                        temp_counts["as_path_prepending"] += 1
 
             elif elem.type == 'W':  # Withdrawal
                 if prefix in routes and collector in routes[prefix]:
@@ -196,12 +373,16 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
                         if routes[prefix][collector][peer_asn][-1] == target_asn:
                             routes[prefix][collector].pop(peer_asn, None)
                             temp_counts["num_withdrawals"] += 1
+                            temp_counts["prefixes_withdrawn"].append(prefix)
 
     print(f"Total records processed: {record_count}")
     print(f"Total elements processed: {element_count}")
 
     # Process the final 5-minute window
-    features, old_routes_as = extract_features(index, routes, old_routes_as, target_asn, temp_counts)
+    features, old_routes_as = extract_features(
+        index, routes, old_routes_as, target_asn,
+        prefix_lengths, med_values, local_prefs, communities_per_prefix, peer_updates
+    )
     features['Timestamp'] = current_window_start
     all_features.append(features)
 
