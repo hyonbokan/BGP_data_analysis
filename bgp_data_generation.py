@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import csv
-from collections import defaultdict
+from collections import defaultdict, Counter
 import ipaddress
 
 
@@ -100,7 +100,75 @@ def is_bogon_prefix(prefix):
     return False
 
 
-def extract_features(index, routes, old_routes_as, target_asn, prefix_lengths, med_values, local_prefs, communities_per_prefix, peer_updates):
+def summarize_peer_updates(peer_updates):
+    if not peer_updates:
+        return {
+            "Total Updates": 0,
+            "Average Updates per Peer": 0,
+            "Max Updates from a Single Peer": 0,
+            "Min Updates from a Single Peer": 0,
+            "Std Dev of Updates": 0
+        }
+    
+    total_updates = sum(peer_updates.values())
+    num_peers = len(peer_updates)
+    avg_updates = total_updates / num_peers if num_peers else 0
+    max_updates = max(peer_updates.values()) if peer_updates else 0
+    min_updates = min(peer_updates.values()) if peer_updates else 0
+    std_dev_updates = (sum((x - avg_updates) ** 2 for x in peer_updates.values()) / num_peers) ** 0.5 if num_peers else 0
+    
+    return {
+        "Total Updates": total_updates,
+        "Average Updates per Peer": avg_updates,
+        "Max Updates from a Single Peer": max_updates,
+        "Min Updates from a Single Peer": min_updates,
+        "Std Dev of Updates": std_dev_updates
+    }
+
+def top_n_peer_updates(peer_updates, n=5):
+    sorted_peers = sorted(peer_updates.items(), key=lambda item: item[1], reverse=True)
+    top_peers = sorted_peers[:n]
+    return {f"Top Peer {i+1} ASN": peer for i, (peer, _) in enumerate(top_peers)}
+
+def summarize_prefix_announcements(prefix_announced):
+    if not prefix_announced:
+        return {
+            "Total Prefixes Announced": 0,
+            "Average Announcements per Prefix": 0,
+            "Max Announcements for a Single Prefix": 0,
+            "Min Announcements for a Single Prefix": 0,
+            "Std Dev of Announcements": 0
+        }
+    
+    total_announcements = sum(prefix_announced.values())
+    num_prefixes = len(prefix_announced)
+    avg_announcements = total_announcements / num_prefixes if num_prefixes else 0
+    max_announcements = max(prefix_announced.values()) if prefix_announced else 0
+    min_announcements = min(prefix_announced.values()) if prefix_announced else 0
+    std_dev_announcements = (sum((x - avg_announcements) ** 2 for x in prefix_announced.values()) / num_prefixes) ** 0.5 if num_prefixes else 0
+    
+    return {
+        "Total Prefixes Announced": num_prefixes,
+        "Average Announcements per Prefix": avg_announcements,
+        "Max Announcements for a Single Prefix": max_announcements,
+        "Min Announcements for a Single Prefix": min_announcements,
+        "Std Dev of Announcements": std_dev_announcements
+    }
+
+def top_n_prefix_announcements(prefix_announced, n=5):
+    sorted_prefixes = sorted(prefix_announced.items(), key=lambda item: item[1], reverse=True)
+    top_prefixes = sorted_prefixes[:n]
+    return {f"Top Prefix {i+1}": prefix for i, (prefix, _) in enumerate(top_prefixes)}
+
+def summarize_unexpected_asns(unexpected_asns):
+    counter = Counter(unexpected_asns)
+    top_unexpected = counter.most_common(3)  # Top 3 unexpected ASNs
+    summary = {f"Unexpected ASN {i+1}": asn for i, (asn, _) in enumerate(top_unexpected)}
+    return summary
+
+def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=None,
+                    prefix_lengths=[], med_values=[], local_prefs=[], 
+                    communities_per_prefix={}, peer_updates={}, anomaly_data={}):
     features = {
         "Timestamp": None,
         "Autonomous System Number": target_asn,
@@ -115,70 +183,80 @@ def extract_features(index, routes, old_routes_as, target_asn, prefix_lengths, m
         "Average Edit Distance": 0,
         "Announcements": 0,
         "Unique Prefixes Announced": 0,
-        "Graph Average Degree": 0,
-        "Graph Betweenness Centrality": 0,
-        "Graph Closeness Centrality": 0,
-        "Graph Eigenvector Centrality": 0,
         # New features
         "Average MED": 0,
         "Average Local Preference": 0,
         "Total Communities": 0,
         "Unique Communities": 0,
-        "Updates per Peer": peer_updates,
-        "Number of Unique Peers": len(peer_updates),
-        "Prefixes Announced": [],
-        "Prefixes Withdrawn": [],
-        "Prefixes with AS Path Prepending": 0,
-        "Bogon Prefixes Detected": 0,
-        "Average Prefix Length": 0,
-        "Max Prefix Length": 0,
-        "Min Prefix Length": 0
+        "Total Updates": 0,
+        "Average Updates per Peer": 0,
+        "Max Updates from a Single Peer": 0,
+        "Min Updates from a Single Peer": 0,
+        "Std Dev of Updates": 0,
+        "Top Peer 1 ASN": None,
+        "Top Peer 2 ASN": None,
+        "Top Peer 3 ASN": None,
+        "Top Peer 4 ASN": None,
+        "Top Peer 5 ASN": None,
+        "Total Prefixes Announced": 0,
+        "Average Announcements per Prefix": 0,
+        "Max Announcements for a Single Prefix": 0,
+        "Min Announcements for a Single Prefix": 0,
+        "Std Dev of Announcements": 0,
+        "Top Prefix 1": None,
+        "Top Prefix 2": None,
+        "Top Prefix 3": None,
+        "Top Prefix 4": None,
+        "Top Prefix 5": None,
+        "Count of Unexpected ASNs in Paths": 0,
+        "Unexpected ASN 1": None,
+        "Unexpected ASN 2": None,
+        "Unexpected ASN 3": None,
+        # Anomaly detection features
+        "Target Prefixes Withdrawn": anomaly_data.get("target_prefixes_withdrawn", 0),
+        "Target Prefixes Announced": anomaly_data.get("target_prefixes_announced", 0),
+        "AS Path Changes": anomaly_data.get("as_path_changes", 0),
     }
 
-    # Set counts for withdrawals, announcements, prefixes announced/withdrawn, bogon prefixes
-    features["Withdrawals"] = temp_counts["num_withdrawals"]
-    features["Announcements"] = temp_counts["num_announcements"]
-    features["Prefixes Announced"] = temp_counts["prefixes_announced"]
-    features["Prefixes Withdrawn"] = temp_counts["prefixes_withdrawn"]
-    features["Bogon Prefixes Detected"] = temp_counts["bogon_prefixes"]
-    features["Prefixes with AS Path Prepending"] = temp_counts["as_path_prepending"]
+    # Initialize temporary counts for aggregation
+    temp_counts = {
+        "prefixes_announced": {},
+        "prefixes_withdrawn": {},
+        "as_path_prepending": 0,
+        "bogon_prefixes": 0,
+        "total_communities": 0,
+        "unique_communities": set()
+    }
 
     routes_as = build_routes_as(routes)
 
-    if index >= 0 and target_asn in routes_as:
-        num_routes = len(routes_as[target_asn])
+    if index >= 0:
+        num_routes = len(routes_as.get(target_asn, {}))
         sum_path_length = 0
         sum_edit_distance = 0
-
-        # Build the graph for the current ASN
-        G = nx.Graph()
-        for prefix, path in routes_as[target_asn].items():
-            for i in range(len(path) - 1):
-                G.add_edge(path[i], path[i + 1])
-
-        # Calculate graph features if the graph has nodes
-        if G.number_of_nodes() > 0:
-            features["Graph Average Degree"] = sum(dict(G.degree).values()) / G.number_of_nodes()
-            features["Graph Betweenness Centrality"] = sum(nx.betweenness_centrality(G).values()) / G.number_of_nodes()
-            features["Graph Closeness Centrality"] = sum(nx.closeness_centrality(G).values()) / G.number_of_nodes()
-            try:
-                eigenvector_centrality = nx.eigenvector_centrality(G, max_iter=1000)
-                features["Graph Eigenvector Centrality"] = sum(eigenvector_centrality.values()) / G.number_of_nodes()
-            except nx.PowerIterationFailedConvergence:
-                features["Graph Eigenvector Centrality"] = 0
 
         # Initialize counts
         new_routes = 0
         route_changes = 0
         origin_changes = 0
 
-        for prefix in routes_as[target_asn].keys():
+        for prefix in routes_as.get(target_asn, {}).keys():
             path = routes_as[target_asn][prefix]
             if target_asn in old_routes_as and prefix in old_routes_as[target_asn]:
                 path_old = old_routes_as[target_asn][prefix]
 
                 if path != path_old:
                     route_changes += 1
+                    # Check for AS path changes involving target ASN
+                    if target_asn in path or target_asn in path_old:
+                        anomaly_data["as_path_changes"] += 1
+
+                        # Detect unexpected ASNs in path to target prefixes
+                        if target_prefixes and prefix in target_prefixes:
+                            unexpected_asns = set(path) - set(path_old)
+                            if unexpected_asns - {target_asn}:
+                                anomaly_data["unexpected_asns_in_paths"].update(unexpected_asns)
+
                 if path[-1] != path_old[-1]:
                     origin_changes += 1
 
@@ -212,17 +290,52 @@ def extract_features(index, routes, old_routes_as, target_asn, prefix_lengths, m
         features["Total Communities"] = temp_counts["total_communities"]
         features["Unique Communities"] = len(temp_counts["unique_communities"])
 
-        # Prefix length statistics
+        # Calculate prefix length statistics
         if prefix_lengths:
             features["Average Prefix Length"] = sum(prefix_lengths) / len(prefix_lengths)
             features["Max Prefix Length"] = max(prefix_lengths)
             features["Min Prefix Length"] = min(prefix_lengths)
 
+        # Summarize and integrate peer updates
+        peer_update_summary = summarize_peer_updates(peer_updates)
+        features["Total Updates"] = peer_update_summary["Total Updates"]
+        features["Average Updates per Peer"] = peer_update_summary["Average Updates per Peer"]
+        features["Max Updates from a Single Peer"] = peer_update_summary["Max Updates from a Single Peer"]
+        features["Min Updates from a Single Peer"] = peer_update_summary["Min Updates from a Single Peer"]
+        features["Std Dev of Updates"] = peer_update_summary["Std Dev of Updates"]
+
+        # Add Top 5 Peers
+        top_peers = top_n_peer_updates(peer_updates, n=5)
+        for key in top_peers:
+            features[key] = top_peers[key]
+
+        # Summarize and integrate prefix announcements
+        prefix_announcement_summary = summarize_prefix_announcements(temp_counts["prefixes_announced"])
+        features["Total Prefixes Announced"] = prefix_announcement_summary["Total Prefixes Announced"]
+        features["Average Announcements per Prefix"] = prefix_announcement_summary["Average Announcements per Prefix"]
+        features["Max Announcements for a Single Prefix"] = prefix_announcement_summary["Max Announcements for a Single Prefix"]
+        features["Min Announcements for a Single Prefix"] = prefix_announcement_summary["Min Announcements for a Single Prefix"]
+        features["Std Dev of Announcements"] = prefix_announcement_summary["Std Dev of Announcements"]
+
+        # Add Top 5 Prefixes
+        top_prefixes = top_n_prefix_announcements(temp_counts["prefixes_announced"], n=5)
+        for key in top_prefixes:
+            features[key] = top_prefixes[key]
+
+        # Summarize unexpected ASNs in paths
+        unexpected_asns = anomaly_data.get("unexpected_asns_in_paths", [])
+        unexpected_asn_summary = summarize_unexpected_asns(unexpected_asns)
+        features["Count of Unexpected ASNs in Paths"] = len(unexpected_asns)
+        features.update(unexpected_asn_summary)
+
     features["Unique Prefixes Announced"] = len(routes_as.get(target_asn, {}))
 
     return features, routes_as
 
-def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], output_file='bgp_features.csv'):
+
+def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None, 
+                    collectors=['rrc00','route-views2', 'route-views.sydney', 'route-views.wide'], 
+                    output_file='bgp_features.csv'):
     stream = pybgpstream.BGPStream(
         from_time=from_time,
         until_time=until_time,
@@ -236,14 +349,10 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
     current_window_start = datetime.strptime(from_time, "%Y-%m-%d %H:%M:%S")
     index = 0
 
-    global temp_counts  # Declare temp_counts as global to access in extract_features
-
     # Initialize temporary counts for announcements and withdrawals
     temp_counts = {
-        "num_announcements": 0,
-        "num_withdrawals": 0,
-        "prefixes_announced": [],
-        "prefixes_withdrawn": [],
+        "prefixes_announced": {},
+        "prefixes_withdrawn": {},
         "as_path_prepending": 0,
         "bogon_prefixes": 0,
         "total_communities": 0,
@@ -256,6 +365,14 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
     local_prefs = []
     communities_per_prefix = {}
     peer_updates = defaultdict(int)
+
+    # Anomaly detection data
+    anomaly_data = {
+        "target_prefixes_withdrawn": 0,
+        "target_prefixes_announced": 0,
+        "as_path_changes": 0,
+        "unexpected_asns_in_paths": set()
+    }
 
     record_count = 0
     element_count = 0
@@ -270,10 +387,11 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
             # If the time exceeds the 5-minute window, process the window and reset
             if elem_time >= current_window_start + timedelta(minutes=5):
                 features, old_routes_as = extract_features(
-                    index, routes, old_routes_as, target_asn,
-                    prefix_lengths, med_values, local_prefs, communities_per_prefix, peer_updates
+                    index, routes, old_routes_as, target_asn, target_prefixes,
+                    prefix_lengths, med_values, local_prefs, 
+                    communities_per_prefix, peer_updates, anomaly_data
                 )
-                features['Timestamp'] = current_window_start
+                features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
                 all_features.append(features)
 
                 # Move to the next 5-minute window
@@ -283,10 +401,8 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
 
                 # Reset temporary counts and data collections
                 temp_counts = {
-                    "num_announcements": 0,
-                    "num_withdrawals": 0,
-                    "prefixes_announced": [],
-                    "prefixes_withdrawn": [],
+                    "prefixes_announced": {},
+                    "prefixes_withdrawn": {},
                     "as_path_prepending": 0,
                     "bogon_prefixes": 0,
                     "total_communities": 0,
@@ -297,6 +413,12 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
                 local_prefs = []
                 communities_per_prefix = {}
                 peer_updates = defaultdict(int)
+                anomaly_data = {
+                    "target_prefixes_withdrawn": 0,
+                    "target_prefixes_announced": 0,
+                    "as_path_changes": 0,
+                    "unexpected_asns_in_paths": set()
+                }
 
             prefix = update.get("prefix")
             if prefix is None:
@@ -307,7 +429,6 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
                 network = ipaddress.ip_network(prefix, strict=False)
                 prefix_length = network.prefixlen
             except ValueError:
-                prefix_length = None  # Handle invalid prefix format
                 continue  # Skip this prefix if invalid
             prefix_lengths.append(prefix_length)
 
@@ -324,11 +445,10 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
             # Processing Announcements (A) and Withdrawals (W)
             if elem.type == 'A':  # Announcement
                 path = update.get('as-path', "").split()
-                if path and path[-1] == target_asn:
-                    temp_counts["num_announcements"] += 1
-                    temp_counts["prefixes_announced"].append(prefix)
+                if path:
+                    temp_counts["prefixes_announced"][prefix] = temp_counts["prefixes_announced"].get(prefix, 0) + 1
 
-                    # Initialize routes after checking for new routes
+                    # Initialize routes
                     if prefix not in routes:
                         routes[prefix] = {}
                     if collector not in routes[prefix]:
@@ -354,36 +474,40 @@ def extract_bgp_data(target_asn, from_time, until_time, collectors=['rrc00'], ou
                     communities = update.get('communities', [])
                     if communities:
                         temp_counts["total_communities"] += len(communities)
-                        temp_counts["unique_communities"].update(communities)
+                        temp_counts["unique_communities"].update(tuple(c) for c in communities)
                         communities_per_prefix[prefix] = communities
 
                     # Check for AS Path Prepending
-                    # Clean the AS path to handle AS sets and confederations
-                    clean_path = []
-                    for asn in path:
-                        if '{' in asn or '(' in asn:
-                            continue  # Skip AS sets and confederations
-                        clean_path.append(asn)
+                    clean_path = [asn for asn in path if '{' not in asn and '(' not in asn]  # Clean AS path
                     if len(set(clean_path)) < len(clean_path):
                         temp_counts["as_path_prepending"] += 1
 
+                    # Anomaly detection for announcements
+                    if target_prefixes and prefix in target_prefixes:
+                        anomaly_data["target_prefixes_announced"] += 1
+                        # Check for unexpected ASNs in path to target prefixes
+                        if target_asn not in path:
+                            anomaly_data["unexpected_asns_in_paths"].update(set(path))
             elif elem.type == 'W':  # Withdrawal
                 if prefix in routes and collector in routes[prefix]:
                     if peer_asn in routes[prefix][collector]:
-                        if routes[prefix][collector][peer_asn][-1] == target_asn:
-                            routes[prefix][collector].pop(peer_asn, None)
-                            temp_counts["num_withdrawals"] += 1
-                            temp_counts["prefixes_withdrawn"].append(prefix)
+                        routes[prefix][collector].pop(peer_asn, None)
+                        temp_counts["prefixes_withdrawn"][prefix] = temp_counts["prefixes_withdrawn"].get(prefix, 0) + 1
+
+                        # Anomaly detection for withdrawals
+                        if target_prefixes and prefix in target_prefixes:
+                            anomaly_data["target_prefixes_withdrawn"] += 1
 
     print(f"Total records processed: {record_count}")
     print(f"Total elements processed: {element_count}")
 
     # Process the final 5-minute window
     features, old_routes_as = extract_features(
-        index, routes, old_routes_as, target_asn,
-        prefix_lengths, med_values, local_prefs, communities_per_prefix, peer_updates
+        index, routes, old_routes_as, target_asn, target_prefixes,
+        prefix_lengths, med_values, local_prefs, 
+        communities_per_prefix, peer_updates, anomaly_data
     )
-    features['Timestamp'] = current_window_start
+    features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
     all_features.append(features)
 
     # Convert the collected features into a DataFrame and save it
