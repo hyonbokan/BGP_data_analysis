@@ -32,7 +32,7 @@ def plot_statistics(df_features, target_asn):
     plt.show()
     
     
-def build_routes_as(routes):
+def build_routes_as(routes, target_asn):
     routes_as = {}
     for prefix in routes:
         for collector in routes[prefix]:
@@ -40,10 +40,10 @@ def build_routes_as(routes):
                 path = routes[prefix][collector][peer_asn]
                 if len(path) == 0:
                     continue
-                asn = path[-1]
-                if asn not in routes_as:
-                    routes_as[asn] = {}
-                routes_as[asn][prefix] = path
+                if target_asn in path:
+                    if target_asn not in routes_as:
+                        routes_as[target_asn] = {}
+                    routes_as[target_asn][prefix] = path
     return routes_as
 
 def is_bogon_prefix(prefix):
@@ -168,26 +168,41 @@ def summarize_unexpected_asns(unexpected_asns):
 
 def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=None,
                     prefix_lengths=[], med_values=[], local_prefs=[], 
-                    communities_per_prefix={}, peer_updates={}, anomaly_data={}):
+                    communities_per_prefix={}, peer_updates={}, anomaly_data={}, temp_counts=None):
+    
+    if temp_counts is None:
+        temp_counts = {
+            "num_new_routes": 0,
+            "num_withdrawals": 0,
+            "num_origin_changes": 0,
+            "num_route_changes": 0,
+            "prefixes_announced": {},
+            "prefixes_withdrawn": {},
+            "as_path_prepending": 0,
+            "bogon_prefixes": 0,
+            "total_communities": 0,
+            "unique_communities": set()
+        }
+        
     features = {
         "Timestamp": None,
         "Autonomous System Number": target_asn,
         "Total Routes": 0,
-        "New Routes": 0,
-        "Withdrawals": 0,
-        "Origin Changes": 0,
-        "Route Changes": 0,
+        "New Routes": temp_counts.get("num_new_routes", 0),
+        "Withdrawals": temp_counts.get("num_withdrawals", 0),
+        "Origin Changes": temp_counts.get("num_origin_changes", 0),
+        "Route Changes": temp_counts.get("num_route_changes", 0),
         "Maximum Path Length": 0,
         "Average Path Length": 0,
         "Maximum Edit Distance": 0,
         "Average Edit Distance": 0,
-        "Announcements": 0,
+        "Announcements": temp_counts.get("num_announcements", 0),
         "Unique Prefixes Announced": 0,
         # New features
         "Average MED": 0,
         "Average Local Preference": 0,
-        "Total Communities": 0,
-        "Unique Communities": 0,
+        "Total Communities": temp_counts.get("total_communities", 0),
+        "Unique Communities": len(temp_counts.get("unique_communities", set())),
         "Total Updates": 0,
         "Average Updates per Peer": 0,
         "Max Updates from a Single Peer": 0,
@@ -218,17 +233,7 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         "AS Path Changes": anomaly_data.get("as_path_changes", 0),
     }
 
-    # Initialize temporary counts for aggregation
-    temp_counts = {
-        "prefixes_announced": {},
-        "prefixes_withdrawn": {},
-        "as_path_prepending": 0,
-        "bogon_prefixes": 0,
-        "total_communities": 0,
-        "unique_communities": set()
-    }
-
-    routes_as = build_routes_as(routes)
+    routes_as = build_routes_as(routes, target_asn)
 
     if index >= 0:
         num_routes = len(routes_as.get(target_asn, {}))
@@ -505,7 +510,7 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
     features, old_routes_as = extract_features(
         index, routes, old_routes_as, target_asn, target_prefixes,
         prefix_lengths, med_values, local_prefs, 
-        communities_per_prefix, peer_updates, anomaly_data
+        communities_per_prefix, peer_updates, anomaly_data, temp_counts
     )
     features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
     all_features.append(features)
