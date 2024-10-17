@@ -30,8 +30,103 @@ def plot_statistics(df_features, target_asn):
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
-    
-    
+
+def detect_bgp_hijacks(from_time, until_time, target_asn=None, target_prefixes=None):
+    """
+    Detects BGP hijacks within a specified time range for a given ASN or list of prefixes.
+
+    Parameters:
+        from_time (str): Start time in the format 'YYYY-MM-DD HH:MM:SS'
+        until_time (str): End time in the format 'YYYY-MM-DD HH:MM:SS'
+        target_asn (int or str, optional): The ASN suspected of hijacking or the legitimate ASN.
+        target_prefixes (list of str, optional): List of prefixes to monitor for hijacks.
+
+    Returns:
+        dict: A dictionary containing detected hijacks.
+    """
+    # Convert target_asn to string for consistency
+    if target_asn is not None:
+        target_asn = str(target_asn)
+
+    # Initialize results
+    results = {
+        "prefix_origin_hijacks": set(),
+        "prefix_path_hijacks": set(),
+        "subprefix_origin_hijacks": set(),
+        "subprefix_path_hijacks": set()
+    }
+
+    # Initialize BGPStream
+    stream = pybgpstream.BGPStream(
+        from_time=from_time,
+        until_time=until_time,
+        record_type="updates"
+    )
+
+    # Build a set of monitored prefixes
+    monitored_prefixes = set()
+    if target_prefixes:
+        monitored_prefixes = set(target_prefixes)
+
+    # Process BGP updates
+    for rec in stream.records():
+        for elem in rec:
+            if elem.type != 'A':
+                continue  # Only process announcements
+
+            prefix = elem.fields.get("prefix")
+            as_path = elem.fields.get("as-path", "")
+            if not prefix or not as_path:
+                continue
+
+            # Split AS path into a list of ASNs, removing AS sets and confederations
+            path = [asn for asn in as_path.strip().split() if '{' not in asn and '(' not in asn]
+            if not path:
+                continue
+
+            origin_asn = path[-1]
+            path_asns = set(path)
+
+            # Check if the prefix matches monitored prefixes or is a subprefix
+            is_monitored_prefix = prefix in monitored_prefixes
+            is_subprefix = False
+            for monitored_prefix in monitored_prefixes:
+                try:
+                    monitored_net = ipaddress.ip_network(monitored_prefix)
+                    prefix_net = ipaddress.ip_network(prefix)
+                    if prefix_net != monitored_net and prefix_net.subnet_of(monitored_net):
+                        is_subprefix = True
+                        break
+                except ValueError:
+                    continue  # Invalid prefix, skip
+
+            # Detect origin hijacks
+            if target_asn and origin_asn == target_asn:
+                if is_monitored_prefix:
+                    results["prefix_origin_hijacks"].add(prefix)
+                elif is_subprefix:
+                    results["subprefix_origin_hijacks"].add(prefix)
+
+            # Detect path hijacks
+            elif target_asn and target_asn in path_asns:
+                if is_monitored_prefix:
+                    results["prefix_path_hijacks"].add(prefix)
+                elif is_subprefix:
+                    results["subprefix_path_hijacks"].add(prefix)
+
+            # If no target ASN is specified, consider any AS announcing the prefix as a potential hijack
+            elif not target_asn:
+                if is_monitored_prefix:
+                    results["prefix_origin_hijacks"].add(prefix)
+                elif is_subprefix:
+                    results["subprefix_origin_hijacks"].add(prefix)
+
+    # Convert sets to lists for easier handling
+    for key in results:
+        results[key] = list(results[key])
+
+    return results
+
 def build_routes_as(routes, target_asn):
     routes_as = {}
     for prefix in routes:
@@ -98,7 +193,6 @@ def is_bogon_prefix(prefix):
         # Invalid IP address format
         return False
     return False
-
 
 def summarize_peer_updates(peer_updates):
     if not peer_updates:
@@ -394,7 +488,7 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
                 features, old_routes_as = extract_features(
                     index, routes, old_routes_as, target_asn, target_prefixes,
                     prefix_lengths, med_values, local_prefs, 
-                    communities_per_prefix, peer_updates, anomaly_data
+                    communities_per_prefix, peer_updates, anomaly_data, temp_counts
                 )
                 features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
                 all_features.append(features)
@@ -554,10 +648,8 @@ def detect_anomalies_new(df, numeric_cols, threshold_multiplier=2):
     thresholds = mean_values + threshold_multiplier * std_values
     anomalies = (diff > thresholds).any(axis=1)
 
-    # Initialize the anomaly_status column with "No anomalies detected"
     df['anomaly_status'] = "No anomalies detected"
     
-    # Label anomalies and add detailed reasons with timestamp
     for idx in df[anomalies].index:
         timestamp = df.loc[idx, 'timestamp']
         reasons = []
