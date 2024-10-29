@@ -10,6 +10,9 @@ from collections import defaultdict, Counter
 import ipaddress
 import logging
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 def plot_statistics(df_features, target_asn):
     numeric_cols = df_features.select_dtypes(include=['number']).columns
 
@@ -454,16 +457,21 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
 
 
 def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None, 
-                     collectors=['rrc00', 'route-views2', 'route-views.sydney', 'route-views.wide'],
-                     output_file='bgp_features.csv'):
+                     collectors=['rrc00'], output_file='output.csv'):
+    # Convert target_asn to string for consistency
+    target_asn = str(target_asn)
 
-    stream = pybgpstream.BGPStream(
-        from_time=from_time,
-        until_time=until_time,
-        record_type="updates",
-        collectors=collectors
-    )
-
+    try:
+        stream = pybgpstream.BGPStream(
+            from_time=from_time,
+            until_time=until_time,
+            record_type="updates",
+            collectors=collectors
+        )
+    except Exception as e:
+        logger.error(f"Error initializing BGPStream: {e}")
+        return None
+    
     all_features = []
     old_routes_as = {}
     routes = {}
@@ -484,177 +492,183 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
         "as_path_changes": 0,
         "unexpected_asns_in_paths": set()
     }
-    print(f"Starting BGP data extraction for ASN {target_asn} from {from_time} to {until_time}")
+    logger.info(f"Starting BGP data extraction for ASN {target_asn} from {from_time} to {until_time}")
 
     record_count = 0
     element_count = 0
 
-    for rec in stream.records():
-        record_count += 1
-        for elem in rec:
-            element_count += 1
-            update = elem.fields
-            elem_time = datetime.utcfromtimestamp(elem.time)
-
-            # If the time exceeds the 5-minute window, process the window and reset
-            if elem_time >= current_window_start + timedelta(minutes=5):
-                features, old_routes_as = extract_features(
-                    index, routes, old_routes_as, target_asn, target_prefixes,
-                    prefix_lengths, med_values, local_prefs, 
-                    communities_per_prefix, peer_updates, anomaly_data, temp_counts
-                )
-                features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
-                all_features.append(features)
-
-                # Move to the next 5-minute window
-                current_window_start += timedelta(minutes=5)
-                routes = {}  # Reset the routes for the next window
-                index += 1
-
-                # Reset temporary counts and data collections
-                temp_counts = initialize_temp_counts()
-                prefix_lengths = []
-                med_values = []
-                local_prefs = []
-                communities_per_prefix = {}
-                peer_updates = defaultdict(int)
-                anomaly_data = {
-                    "target_prefixes_withdrawn": 0,
-                    "target_prefixes_announced": 0,
-                    "as_path_changes": 0,
-                    "unexpected_asns_in_paths": set()
-                }
-
-            prefix = update.get("prefix")
-            if prefix is None:
-                continue
-
-            # Initialize process_update flag
-            process_update = False
-
-            # Check if target ASN is in the AS path
-            as_path_str = update.get('as-path', "")
-            as_path = [asn for asn in as_path_str.split() if '{' not in asn and '(' not in asn]
-            if target_asn in as_path:
-                process_update = True
-
-            # If target_prefixes are provided, check if the prefix is in target_prefixes
-            if target_prefixes:
-                if prefix in target_prefixes:
-                    process_update = True
-                else:
-                    # Optionally, check if the prefix is a subprefix of any target_prefix
-                    for tgt_prefix in target_prefixes:
-                        try:
-                            tgt_net = ipaddress.ip_network(tgt_prefix)
-                            prefix_net = ipaddress.ip_network(prefix)
-                            
-                            # Only compare if both prefixes are of the same IP version
-                            if tgt_net.version == prefix_net.version:
-                                if prefix_net.subnet_of(tgt_net):
-                                    process_update = True
-                                    break
-                        except ValueError:
-                            logging.warning(f"Invalid prefix encountered: {tgt_prefix} or {prefix}")
-                            continue  # Invalid prefix, skip
-            else:
-                # If target_prefixes is None, we don't filter by prefixes
-                pass
-
-            # If neither condition is met, skip this update
-            if not process_update:
-                continue
-
-            # Collect prefix length
+    try:
+        for rec in stream.records():
+            record_count += 1
             try:
-                network = ipaddress.ip_network(prefix, strict=False)
-                prefix_length = network.prefixlen
-            except ValueError:
-                continue  # Skip this prefix if invalid
-            prefix_lengths.append(prefix_length)
+                for elem in rec:
+                    element_count += 1
+                    update = elem.fields
+                    elem_time = datetime.utcfromtimestamp(elem.time)
 
-            # Check for bogon prefixes
-            if is_bogon_prefix(prefix):
-                temp_counts["bogon_prefixes"] += 1
-
-            peer_asn = elem.peer_asn
-            collector = rec.collector
-
-            # Count updates per peer
-            peer_updates[peer_asn] += 1
-
-            # Processing Announcements (A) and Withdrawals (W)
-            if elem.type == 'A':  # Announcement
-                if as_path:
-                    temp_counts["prefixes_announced"][prefix] = temp_counts["prefixes_announced"].get(prefix, 0) + 1
-                    temp_counts["num_announcements"] += 1
-                    # Initialize routes
-                    if prefix not in routes:
-                        routes[prefix] = {}
-                    if collector not in routes[prefix]:
-                        routes[prefix][collector] = {}
-
-                    routes[prefix][collector][peer_asn] = as_path
-
-                    # Collect MED and Local Preference
-                    med = update.get('med')
-                    if med is not None:
+                    # If the time exceeds the 5-minute window, process the window and reset
+                    if elem_time >= current_window_start + timedelta(minutes=5):
                         try:
-                            med_values.append(int(med))
-                        except ValueError:
-                            pass  # Handle non-integer MED values
-                    local_pref = update.get('local-pref')
-                    if local_pref is not None:
-                        try:
-                            local_prefs.append(int(local_pref))
-                        except ValueError:
-                            pass  # Handle non-integer Local Preference values
+                            features, old_routes_as = extract_features(
+                                index, routes, old_routes_as, target_asn, target_prefixes,
+                                prefix_lengths, med_values, local_prefs, 
+                                communities_per_prefix, peer_updates, anomaly_data, temp_counts
+                            )
+                            features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
+                            all_features.append(features)
+                        except Exception as e:
+                            logger.error(f"Error extracting features: {e}")
+                                
+                        # Move to the next 5-minute window
+                        current_window_start += timedelta(minutes=5)
+                        routes = {}  # Reset the routes for the next window
+                        index += 1
+                        temp_counts = initialize_temp_counts()
+                        prefix_lengths = []
+                        med_values = []
+                        local_prefs = []
+                        communities_per_prefix = {}
+                        peer_updates = defaultdict(int)
+                        anomaly_data = {
+                            "target_prefixes_withdrawn": 0,
+                            "target_prefixes_announced": 0,
+                            "as_path_changes": 0,
+                            "unexpected_asns_in_paths": set()
+                        }
 
-                    # Collect Communities
-                    communities = update.get('communities', [])
-                    if communities:
-                        temp_counts["total_communities"] += len(communities)
-                        temp_counts["unique_communities"].update(tuple(c) for c in communities)
-                        communities_per_prefix[prefix] = communities
+                    prefix = update.get("prefix")
+                    if prefix is None:
+                        continue
 
-                    # Check for AS Path Prepending
-                    if len(set(as_path)) < len(as_path):
-                        temp_counts["as_path_prepending"] += 1
+                    # Initialize process_update flag
+                    process_update = False
 
-                    # Anomaly detection for announcements
-                    if isinstance(target_prefixes, (list, set)) and prefix in target_prefixes:
-                        anomaly_data["target_prefixes_announced"] += 1
-                        # Check for unexpected ASNs in path to target prefixes
-                        if target_asn not in as_path:
-                            anomaly_data["unexpected_asns_in_paths"].update(set(as_path))
-            elif elem.type == 'W':  # Withdrawal
-                if prefix in routes and collector in routes[prefix]:
-                    if peer_asn in routes[prefix][collector]:
-                        routes[prefix][collector].pop(peer_asn, None)
-                        temp_counts["prefixes_withdrawn"][prefix] = temp_counts["prefixes_withdrawn"].get(prefix, 0) + 1
-                        temp_counts["num_withdrawals"] += 1
-                        
-                        # Anomaly detection for withdrawals
-                        if target_prefixes and prefix in target_prefixes:
-                            anomaly_data["target_prefixes_withdrawn"] += 1
+                    # Check if target ASN is in the AS path
+                    as_path_str = update.get('as-path', "")
+                    as_path = [asn for asn in as_path_str.split() if '{' not in asn and '(' not in asn]
+                    if target_asn in as_path:
+                        process_update = True
 
-    print(f"Total records processed: {record_count}")
-    print(f"Total elements processed: {element_count}")
+                    # If target_prefixes are provided, check if the prefix is in target_prefixes
+                    if target_prefixes:
+                        if prefix in target_prefixes:
+                            process_update = True
+                        else:
+                            for tgt_prefix in target_prefixes:
+                                try:
+                                    tgt_net = ipaddress.ip_network(tgt_prefix)
+                                    prefix_net = ipaddress.ip_network(prefix)
+                                    if tgt_net.version == prefix_net.version:
+                                        if prefix_net.subnet_of(tgt_net):
+                                            process_update = True
+                                            break
+                                except ValueError:
+                                    logging.warning(f"Invalid prefix encountered: {tgt_prefix} or {prefix}")
+                                    continue
+                    if not process_update:
+                        continue
 
-    # Process the final 5-minute window
-    features, old_routes_as = extract_features(
-        index, routes, old_routes_as, target_asn, target_prefixes,
-        prefix_lengths, med_values, local_prefs, 
-        communities_per_prefix, peer_updates, anomaly_data, temp_counts
-    )
-    features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
-    all_features.append(features)
+                    try:
+                        network = ipaddress.ip_network(prefix, strict=False)
+                        prefix_length = network.prefixlen
+                        prefix_lengths.append(prefix_length)
+                    except ValueError:
+                        logger.warning(f"Invalid prefix skipped: {prefix}")
+                        continue
 
-    # Convert the collected features into a DataFrame and save it
-    df_features = pd.json_normalize(all_features, sep='_').fillna(0)
-    df_features.to_csv(output_file, index=False)
-    print(f"Data saved to {output_file}")
+                    # Check for bogon prefixes
+                    if is_bogon_prefix(prefix):
+                        temp_counts["bogon_prefixes"] += 1
 
+                    peer_asn = elem.peer_asn
+                    collector = rec.collector
+                    peer_updates[peer_asn] += 1
+
+                    # Processing Announcements (A) and Withdrawals (W)
+                    if elem.type == 'A':  # Announcement
+                        if as_path:
+                            temp_counts["prefixes_announced"][prefix] = temp_counts["prefixes_announced"].get(prefix, 0) + 1
+                            temp_counts["num_announcements"] += 1
+                            # Initialize routes
+                            if prefix not in routes:
+                                routes[prefix] = {}
+                            if collector not in routes[prefix]:
+                                routes[prefix][collector] = {}
+
+                            routes[prefix][collector][peer_asn] = as_path
+
+                            # Collect MED and Local Preference
+                            med = update.get('med')
+                            if med is not None:
+                                try:
+                                    med_values.append(int(med))
+                                except ValueError:
+                                    pass  # Handle non-integer MED values
+                            local_pref = update.get('local-pref')
+                            if local_pref is not None:
+                                try:
+                                    local_prefs.append(int(local_pref))
+                                except ValueError:
+                                    pass  # Handle non-integer Local Preference values
+
+                            # Collect Communities
+                            communities = update.get('communities', [])
+                            if communities:
+                                temp_counts["total_communities"] += len(communities)
+                                temp_counts["unique_communities"].update(tuple(c) for c in communities)
+                                communities_per_prefix[prefix] = communities
+
+                            # Check for AS Path Prepending
+                            if len(set(as_path)) < len(as_path):
+                                temp_counts["as_path_prepending"] += 1
+
+                            # Anomaly detection for announcements
+                            if isinstance(target_prefixes, (list, set)) and prefix in target_prefixes:
+                                anomaly_data["target_prefixes_announced"] += 1
+                                # Check for unexpected ASNs in path to target prefixes
+                                if target_asn not in as_path:
+                                    anomaly_data["unexpected_asns_in_paths"].update(set(as_path))
+                    elif elem.type == 'W':  # Withdrawal
+                        if prefix in routes and collector in routes[prefix]:
+                            if peer_asn in routes[prefix][collector]:
+                                routes[prefix][collector].pop(peer_asn, None)
+                                temp_counts["prefixes_withdrawn"][prefix] = temp_counts["prefixes_withdrawn"].get(prefix, 0) + 1
+                                temp_counts["num_withdrawals"] += 1
+                                
+                                # Anomaly detection for withdrawals
+                                if target_prefixes and prefix in target_prefixes:
+                                    anomaly_data["target_prefixes_withdrawn"] += 1
+            except Exception as e:
+                logger.error(f"Error processing element in record {record_count}: {e}")
+                continue
+            
+    except Exception as e:
+        logger.error(f"Streaming error encountered: {e}")
+        return None
+    
+    logger.info(f"Total records processed: {record_count}")
+    logger.info(f"Total elements processed: {element_count}")
+    
+    try:
+        # Process the final 5-minute window
+        features, old_routes_as = extract_features(
+            index, routes, old_routes_as, target_asn, target_prefixes,
+            prefix_lengths, med_values, local_prefs, 
+            communities_per_prefix, peer_updates, anomaly_data, temp_counts
+        )
+        features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(f"Features at index {index}: {features}")
+        all_features.append(features)
+        
+        # Convert collected features to a DataFrame
+        df_features = pd.json_normalize(all_features, sep='_').fillna(0)
+        logger.info(df_features)
+        df_features.to_csv(output_file)
+        
+    except Exception as e:
+        logger.error(f"Final data processing error: {e}")
+        return None
+    
     return df_features
 
 def detect_anomalies(df, numeric_cols, threshold_multiplier=2):
