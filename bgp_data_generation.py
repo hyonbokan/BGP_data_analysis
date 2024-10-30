@@ -142,9 +142,14 @@ def initialize_temp_counts():
         "as_path_prepending": 0,
         "bogon_prefixes": 0,
         "total_communities": 0,
-        "unique_communities": set()
+        "unique_communities": set(),
+        # New counts
+        "all_peers": set(),
+        "all_paths": set(),
+        "all_prefixes_announced_list": set(),
+        "all_prefixes_withdrawn_list": set(),
     }
-    
+
 
 def build_routes_as(routes, target_asn):
     routes_as = {}
@@ -159,6 +164,16 @@ def build_routes_as(routes, target_asn):
                         routes_as[target_asn] = {}
                     routes_as[target_asn][prefix] = path
     return routes_as
+
+def top_n_prefix_announcements(prefix_announced, n=5):
+    sorted_prefixes = sorted(prefix_announced.items(), key=lambda item: item[1], reverse=True)
+    top_prefixes = sorted_prefixes[:n]
+    return {f"Top Prefix {i+1}": prefix for i, (prefix, _) in enumerate(top_prefixes)}
+
+def top_n_peer_updates(peer_updates, n=5):
+    sorted_peers = sorted(peer_updates.items(), key=lambda item: item[1], reverse=True)
+    top_peers = sorted_peers[:n]
+    return {f"Top Peer {i+1} ASN": peer for i, (peer, _) in enumerate(top_peers)}
 
 def is_bogon_prefix(prefix):
     # List of bogon prefixes for IPv4
@@ -222,14 +237,14 @@ def summarize_peer_updates(peer_updates):
             "Min Updates from a Single Peer": 0,
             "Std Dev of Updates": 0
         }
-    
+
     total_updates = sum(peer_updates.values())
     num_peers = len(peer_updates)
     avg_updates = total_updates / num_peers if num_peers else 0
     max_updates = max(peer_updates.values()) if peer_updates else 0
     min_updates = min(peer_updates.values()) if peer_updates else 0
     std_dev_updates = (sum((x - avg_updates) ** 2 for x in peer_updates.values()) / num_peers) ** 0.5 if num_peers else 0
-    
+
     return {
         "Total Updates": total_updates,
         "Average Updates per Peer": avg_updates,
@@ -237,11 +252,6 @@ def summarize_peer_updates(peer_updates):
         "Min Updates from a Single Peer": min_updates,
         "Std Dev of Updates": std_dev_updates
     }
-
-def top_n_peer_updates(peer_updates, n=5):
-    sorted_peers = sorted(peer_updates.items(), key=lambda item: item[1], reverse=True)
-    top_peers = sorted_peers[:n]
-    return {f"Top Peer {i+1} ASN": peer for i, (peer, _) in enumerate(top_peers)}
 
 def summarize_prefix_announcements(prefix_announced):
     if not prefix_announced:
@@ -252,14 +262,14 @@ def summarize_prefix_announcements(prefix_announced):
             "Min Announcements for a Single Prefix": 0,
             "Std Dev of Announcements": 0
         }
-    
+
     total_announcements = sum(prefix_announced.values())
     num_prefixes = len(prefix_announced)
     avg_announcements = total_announcements / num_prefixes if num_prefixes else 0
     max_announcements = max(prefix_announced.values()) if prefix_announced else 0
     min_announcements = min(prefix_announced.values()) if prefix_announced else 0
     std_dev_announcements = (sum((x - avg_announcements) ** 2 for x in prefix_announced.values()) / num_prefixes) ** 0.5 if num_prefixes else 0
-    
+
     return {
         "Total Prefixes Announced": num_prefixes,
         "Average Announcements per Prefix": avg_announcements,
@@ -268,21 +278,16 @@ def summarize_prefix_announcements(prefix_announced):
         "Std Dev of Announcements": std_dev_announcements
     }
 
-def top_n_prefix_announcements(prefix_announced, n=5):
-    sorted_prefixes = sorted(prefix_announced.items(), key=lambda item: item[1], reverse=True)
-    top_prefixes = sorted_prefixes[:n]
-    return {f"Top Prefix {i+1}": prefix for i, (prefix, _) in enumerate(top_prefixes)}
-
 def summarize_unexpected_asns(unexpected_asns):
     counter = Counter(unexpected_asns)
     top_unexpected = counter.most_common(3)  # Top 3 unexpected ASNs
     summary = {f"Unexpected ASN {i+1}": asn for i, (asn, _) in enumerate(top_unexpected)}
     return summary
 
+
 def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=None,
                     prefix_lengths=[], med_values=[], local_prefs=[], 
-                    communities_per_prefix={}, peer_updates={}, anomaly_data={}, temp_counts=None,
-                    ):
+                    communities_per_prefix={}, peer_updates={}, anomaly_data={}, temp_counts=None):
     
     if temp_counts is None:
         temp_counts = initialize_temp_counts()
@@ -312,21 +317,14 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         "Max Updates from a Single Peer": 0,
         "Min Updates from a Single Peer": 0,
         "Std Dev of Updates": 0,
-        "Top Peer 1 ASN": None,
-        "Top Peer 2 ASN": None,
-        "Top Peer 3 ASN": None,
-        "Top Peer 4 ASN": None,
-        "Top Peer 5 ASN": None,
+        # Removed Top Peer features
+        # Removed Top Prefix features
         "Total Prefixes Announced": 0,
         "Average Announcements per Prefix": 0,
         "Max Announcements for a Single Prefix": 0,
         "Min Announcements for a Single Prefix": 0,
         "Std Dev of Announcements": 0,
-        "Top Prefix 1": None,
-        "Top Prefix 2": None,
-        "Top Prefix 3": None,
-        "Top Prefix 4": None,
-        "Top Prefix 5": None,
+        # Removed Top Prefix features
         "Count of Unexpected ASNs in Paths": 0,
         "Unexpected ASN 1": None,
         "Unexpected ASN 2": None,
@@ -337,6 +335,15 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         "AS Path Changes": anomaly_data.get("as_path_changes", 0),
         # Policy-related feature
         "AS Path Prepending": temp_counts.get("as_path_prepending", 0),
+        # New list and count features
+        "All Peers": [],
+        "Total Peers": 0,
+        "All Paths": [],
+        "Total Paths": 0,
+        "All Prefixes Announced": [],
+        "Total Prefixes Announced List": 0,
+        "All Prefixes Withdrawn": [],
+        "Total Prefixes Withdrawn List": 0,
     }
 
     routes_as = build_routes_as(routes, target_asn)
@@ -353,8 +360,13 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
 
         for prefix in routes_as.get(target_asn, {}).keys():
             path = routes_as[target_asn][prefix]
+            path_str = ','.join(map(str, path))  # Convert path to string for storage
+            temp_counts["all_paths"].add(path_str)
+
             if target_asn in old_routes_as and prefix in old_routes_as[target_asn]:
                 path_old = old_routes_as[target_asn][prefix]
+                path_old_str = ','.join(map(str, path_old))
+                temp_counts["all_paths"].add(path_old_str)
 
                 if path != path_old:
                     route_changes += 1
@@ -427,10 +439,10 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         features["Min Updates from a Single Peer"] = peer_update_summary["Min Updates from a Single Peer"]
         features["Std Dev of Updates"] = peer_update_summary["Std Dev of Updates"]
 
-        # Add Top 5 Peers
-        top_peers = top_n_peer_updates(peer_updates, n=5)
-        for key in top_peers:
-            features[key] = top_peers[key]
+        # Removed Top 5 Peers
+        # Instead, add all peers and their count
+        features["All Peers"] = list(peer_updates.keys())
+        features["Total Peers"] = len(peer_updates)
 
         # Summarize and integrate prefix announcements
         prefix_announcement_summary = summarize_prefix_announcements(temp_counts["prefixes_announced"])
@@ -440,10 +452,14 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         features["Min Announcements for a Single Prefix"] = prefix_announcement_summary["Min Announcements for a Single Prefix"]
         features["Std Dev of Announcements"] = prefix_announcement_summary["Std Dev of Announcements"]
 
-        # Add Top 5 Prefixes
-        top_prefixes = top_n_prefix_announcements(temp_counts["prefixes_announced"], n=5)
-        for key in top_prefixes:
-            features[key] = top_prefixes[key]
+        # Removed Top 5 Prefixes
+        # Instead, add all prefixes announced and their count
+        features["All Prefixes Announced"] = list(temp_counts["prefixes_announced"].keys())
+        features["Total Prefixes Announced List"] = len(temp_counts["prefixes_announced"])
+
+        # Similarly, add all prefixes withdrawn and their count
+        features["All Prefixes Withdrawn"] = list(temp_counts["prefixes_withdrawn"].keys())
+        features["Total Prefixes Withdrawn List"] = len(temp_counts["prefixes_withdrawn"])
 
         # Summarize unexpected ASNs in paths
         unexpected_asns = anomaly_data.get("unexpected_asns_in_paths", [])
@@ -452,6 +468,9 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         features.update(unexpected_asn_summary)
 
     features["Unique Prefixes Announced"] = len(routes_as.get(target_asn, {}))
+    # Add lists to features
+    features["All Paths"] = list(temp_counts["all_paths"])
+    features["Total Paths"] = len(temp_counts["all_paths"])
 
     return features, routes_as
 
@@ -524,6 +543,7 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
                         routes = {}  # Reset the routes for the next window
                         index += 1
                         temp_counts = initialize_temp_counts()
+                        temp_counts['as_path_prepending'] = 0
                         prefix_lengths = []
                         med_values = []
                         local_prefs = []
@@ -563,7 +583,7 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
                                             process_update = True
                                             break
                                 except ValueError:
-                                    logging.warning(f"Invalid prefix encountered: {tgt_prefix} or {prefix}")
+                                    logger.warning(f"Invalid prefix encountered: {tgt_prefix} or {prefix}")
                                     continue
                     if not process_update:
                         continue
@@ -583,12 +603,15 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
                     peer_asn = elem.peer_asn
                     collector = rec.collector
                     peer_updates[peer_asn] += 1
+                    temp_counts["all_peers"].add(peer_asn)
 
                     # Processing Announcements (A) and Withdrawals (W)
                     if elem.type == 'A':  # Announcement
                         if as_path:
                             temp_counts["prefixes_announced"][prefix] = temp_counts["prefixes_announced"].get(prefix, 0) + 1
                             temp_counts["num_announcements"] += 1
+                            temp_counts["all_prefixes_announced_list"].add(prefix)
+
                             # Initialize routes
                             if prefix not in routes:
                                 routes[prefix] = {}
@@ -634,6 +657,7 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
                                 routes[prefix][collector].pop(peer_asn, None)
                                 temp_counts["prefixes_withdrawn"][prefix] = temp_counts["prefixes_withdrawn"].get(prefix, 0) + 1
                                 temp_counts["num_withdrawals"] += 1
+                                temp_counts["all_prefixes_withdrawn_list"].add(prefix)
                                 
                                 # Anomaly detection for withdrawals
                                 if target_prefixes and prefix in target_prefixes:
@@ -663,7 +687,7 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
         # Convert collected features to a DataFrame
         df_features = pd.json_normalize(all_features, sep='_').fillna(0)
         logger.info(df_features)
-        df_features.to_csv(output_file)
+        df_features.to_csv(output_file, index=False)
         
     except Exception as e:
         logger.error(f"Final data processing error: {e}")
