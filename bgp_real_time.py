@@ -6,22 +6,10 @@ import pandas as pd
 from collections import defaultdict
 import ipaddress
 import logging
-from bgp_data_generation import extract_features
+from bgp_data_generation import extract_features, initialize_temp_counts, build_routes_as, summarize_peer_updates, summarize_prefix_announcements, summarize_unexpected_asns
 
-def initialize_temp_counts():
-    return {
-        "num_announcements": 0,
-        "num_withdrawals": 0,
-        "num_new_routes": 0,
-        "num_origin_changes": 0,
-        "num_route_changes": 0,
-        "prefixes_announced": {},
-        "prefixes_withdrawn": {},
-        "as_path_prepending": 0,
-        "bogon_prefixes": 0,
-        "total_communities": 0,
-        "unique_communities": set()
-    }
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 def convert_lists_to_tuples(df):
     for col in df.columns:
@@ -30,7 +18,13 @@ def convert_lists_to_tuples(df):
             df[col] = df[col].apply(lambda x: tuple(x) if isinstance(x, list) else x)
     return df
 
-    
+def convert_tuples_to_lists(df):
+    for col in df.columns:
+        # Check if any element in the column is a tuple
+        if df[col].apply(lambda x: isinstance(x, tuple)).any():
+            df[col] = df[col].apply(lambda x: list(x) if isinstance(x, tuple) else x)
+    return df
+
 def run_real_time_bgpstream(asn, collection_period, return_dict, target_prefixes=None):
     all_features = []
     stream = pybgpstream.BGPStream(
@@ -65,7 +59,7 @@ def run_real_time_bgpstream(asn, collection_period, return_dict, target_prefixes
 
             # Check if the collection period has ended
             if time.time() - start_time >= collection_period.total_seconds():
-                print("Collection period ended. Processing data...")
+                logger.info("Collection period ended. Processing data...")
                 break
 
             try:
@@ -117,6 +111,7 @@ def run_real_time_bgpstream(asn, collection_period, return_dict, target_prefixes
                         temp_counts["prefixes_announced"][prefix] = temp_counts["prefixes_announced"].get(prefix, 0) + 1
                         temp_counts["num_announcements"] += 1
                         peer_updates[peer_asn] += 1
+                        temp_counts["all_peers"].add(peer_asn)
 
                         # Check if it's a new route
                         if peer_asn not in routes[prefix][collector]:
@@ -171,26 +166,27 @@ def run_real_time_bgpstream(asn, collection_period, return_dict, target_prefixes
                                 temp_counts["prefixes_withdrawn"][prefix] = temp_counts["prefixes_withdrawn"].get(prefix, 0) + 1
                                 temp_counts["num_withdrawals"] += 1
                                 peer_updates[peer_asn] += 1
+                                temp_counts["all_peers"].add(peer_asn)
                                 
                                 # Anomaly detection for withdrawals
                                 if target_prefixes and prefix in target_prefixes:
                                     anomaly_data["target_prefixes_withdrawn"] += 1
 
             except KeyError as ke:
-                print(f"KeyError processing record: {ke}. Continuing with the next record.")
+                logger.info(f"KeyError processing record: {ke}. Continuing with the next record.")
                 continue
 
             except ValueError as ve:
-                print(f"ValueError processing record: {ve}. Continuing with the next record.")
+                logger.info(f"ValueError processing record: {ve}. Continuing with the next record.")
                 continue
 
             except Exception as e:
-                print(f"Unexpected error processing record: {e}. Continuing with the next record.")
+                logger.info(f"Unexpected error processing record: {e}. Continuing with the next record.")
                 continue
 
             # Time window check: aggregate and reset every 1 minute
             if current_time >= current_window_start + timedelta(minutes=1):
-                print(f"Reached time window: {current_window_start} to {current_time}")
+                logger.info(f"Reached time window: {current_window_start} to {current_time}")
 
                 # Extract features, including paths
                 features, old_routes_as = extract_features(
@@ -201,7 +197,7 @@ def run_real_time_bgpstream(asn, collection_period, return_dict, target_prefixes
                 # Check if features is non-empty
                 if features:
                     features['Timestamp'] = current_window_start.strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"Features at index {index}: {features}")
+                    logger.info(f"Features at index {index}: {features}")
                     
                     all_features.append(features)
 
@@ -211,9 +207,9 @@ def run_real_time_bgpstream(asn, collection_period, return_dict, target_prefixes
                         # Update return_dict with the latest features
                         return_dict['features_df'] = features_df
                     except ValueError as ve:
-                        print(f"ValueError creating DataFrame from features: {ve}. Skipping this window.")
+                        logger.info(f"ValueError creating DataFrame from features: {ve}. Skipping this window.")
                 else:
-                    print(f"No features extracted for this window. Skipping DataFrame creation.")
+                    logger.info(f"No features extracted for this window. Skipping DataFrame creation.")
 
                 current_window_start = current_time.replace(second=0, microsecond=0)
                 routes = {}
@@ -246,13 +242,13 @@ def run_real_time_bgpstream(asn, collection_period, return_dict, target_prefixes
                     final_features_df = pd.DataFrame(all_features).dropna(axis=1, how='all')
                     return_dict['features_df'] = final_features_df
                 except ValueError as ve:
-                    print(f"ValueError creating final DataFrame from all_features: {ve}.")
+                    logger.info(f"ValueError creating final DataFrame from all_features: {ve}.")
             else:
-                print("No features extracted in the final aggregation window.")
+                logger.info("No features extracted in the final aggregation window.")
                 
     except Exception as e:
         error_message = f"An error occurred during real-time data collection for {asn}: {e}"
-        print(error_message)
+        logger.info(error_message)
         return_dict['error'] = error_message
         if all_features:
             features_df = pd.DataFrame(all_features).dropna(axis=1, how='all')
@@ -263,7 +259,7 @@ def collect_real_time_data(asn, target_prefixes=None, collection_period=timedelt
     all_collected_data = []  # List to store all collected DataFrames
     features_df = pd.DataFrame()
 
-    print(f"\nCollecting data for ASN {asn} for {collection_period.total_seconds() // 60} minutes...")
+    logger.info(f"\nCollecting data for ASN {asn} for {int(collection_period.total_seconds() // 60)} minutes...")
 
     manager = multiprocessing.Manager()
     return_dict = manager.dict()
@@ -279,18 +275,18 @@ def collect_real_time_data(asn, target_prefixes=None, collection_period=timedelt
     last_features_df = pd.DataFrame()
 
     no_change_counter = 0
-    max_no_change_iterations = 2  # Adjust as needed
+    max_no_change_iterations = 1
 
     while time.time() < end_time + 5:
         if 'error' in return_dict:
-            print(f"Real-time data collection encountered an error: {return_dict['error']}")
+            logger.info(f"Real-time data collection encountered an error: {return_dict['error']}")
             features_df = return_dict.get('features_df', pd.DataFrame())
             break
 
         features_df = return_dict.get('features_df', pd.DataFrame())
 
         if not features_df.empty:
-            print(f"\nUpdated features_df at {datetime.utcnow()}:\n{features_df.tail(1)}\n")
+            logger.info(f"\nUpdated features_df at {datetime.utcnow()}:\n{features_df.tail(1)}\n")
 
             # Save the current features_df to the list
             all_collected_data.append(features_df.copy())
@@ -298,19 +294,19 @@ def collect_real_time_data(asn, target_prefixes=None, collection_period=timedelt
             if not last_features_df.empty and features_df.equals(last_features_df):
                 no_change_counter += 1
                 if no_change_counter >= max_no_change_iterations:
-                    print(f"No changes in data for the last {no_change_counter} intervals. Restarting data collection...")
+                    logger.info(f"No changes in data for the last {no_change_counter} intervals. Restarting data collection...")
                     # Calculate remaining time for the collection
                     elapsed_time = timedelta(seconds=time.time() - start_time)
                     remaining_time = collection_period - elapsed_time
                     if remaining_time.total_seconds() <= 0:
-                        print("No remaining time left for data collection. Exiting.")
+                        logger.info("No remaining time left for data collection. Exiting.")
                         break
 
                     # Restart the process with the remaining collection period
                     p.terminate()
                     p.join()
                     
-                    print(f"Restarting data collection for the remaining {int(remaining_time.total_seconds())} seconds...")
+                    logger.info(f"Restarting data collection for the remaining {int(remaining_time.total_seconds())} seconds...")
                     p = multiprocessing.Process(
                         target=run_real_time_bgpstream, 
                         args=(asn, remaining_time, return_dict, target_prefixes)
@@ -325,7 +321,7 @@ def collect_real_time_data(asn, target_prefixes=None, collection_period=timedelt
         time.sleep(60)  # Sleep for 60 seconds to align with aggregation window
         
     if p.is_alive():
-        print("BGPStream collection timed out. Terminating process...")
+        logger.info("BGPStream collection timed out. Terminating process...")
         p.terminate()
         p.join()
 
@@ -340,7 +336,10 @@ def collect_real_time_data(asn, target_prefixes=None, collection_period=timedelt
 
     # Remove duplicates from the final DataFrame
     final_features_df = final_features_df.drop_duplicates()
-    print(final_features_df[['Top Peer 1 ASN', 'Top Peer 2 ASN', 'Top Prefix 1', 'Top Prefix 2']].head())
-    final_features_df.to_csv(f"{asn}_real_time.csv")
+    logger.info("Removed duplicate rows from the DataFrame.")
+    
+    final_features_df = convert_tuples_to_lists(final_features_df)
+    logger.info(final_features_df.head())
+    final_features_df.to_csv(f"{asn}_real_time.csv", index=False)
     
     return final_features_df

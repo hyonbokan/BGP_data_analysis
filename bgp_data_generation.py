@@ -165,16 +165,6 @@ def build_routes_as(routes, target_asn):
                     routes_as[target_asn][prefix] = path
     return routes_as
 
-def top_n_prefix_announcements(prefix_announced, n=5):
-    sorted_prefixes = sorted(prefix_announced.items(), key=lambda item: item[1], reverse=True)
-    top_prefixes = sorted_prefixes[:n]
-    return {f"Top Prefix {i+1}": prefix for i, (prefix, _) in enumerate(top_prefixes)}
-
-def top_n_peer_updates(peer_updates, n=5):
-    sorted_peers = sorted(peer_updates.items(), key=lambda item: item[1], reverse=True)
-    top_peers = sorted_peers[:n]
-    return {f"Top Peer {i+1} ASN": peer for i, (peer, _) in enumerate(top_peers)}
-
 def is_bogon_prefix(prefix):
     # List of bogon prefixes for IPv4
     bogon_ipv4_prefixes = [
@@ -317,14 +307,11 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         "Max Updates from a Single Peer": 0,
         "Min Updates from a Single Peer": 0,
         "Std Dev of Updates": 0,
-        # Removed Top Peer features
-        # Removed Top Prefix features
         "Total Prefixes Announced": 0,
         "Average Announcements per Prefix": 0,
         "Max Announcements for a Single Prefix": 0,
         "Min Announcements for a Single Prefix": 0,
         "Std Dev of Announcements": 0,
-        # Removed Top Prefix features
         "Count of Unexpected ASNs in Paths": 0,
         "Unexpected ASN 1": None,
         "Unexpected ASN 2": None,
@@ -466,7 +453,19 @@ def extract_features(index, routes, old_routes_as, target_asn, target_prefixes=N
         unexpected_asn_summary = summarize_unexpected_asns(unexpected_asns)
         features["Count of Unexpected ASNs in Paths"] = len(unexpected_asns)
         features.update(unexpected_asn_summary)
+        
+    # Check if any significant data was collected
+    significant_data = any([
+        features["New Routes"] > 0,
+        features["Origin Changes"] > 0,
+        features["Route Changes"] > 0,
+        features["Announcements"] > 0,
+        features["Total Updates"] > 0,
+    ])
 
+    if not significant_data:
+        return None, old_routes_as
+    
     features["Unique Prefixes Announced"] = len(routes_as.get(target_asn, {}))
     # Add lists to features
     features["All Paths"] = list(temp_counts["all_paths"])
@@ -533,8 +532,9 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
                                 prefix_lengths, med_values, local_prefs, 
                                 communities_per_prefix, peer_updates, anomaly_data, temp_counts
                             )
-                            features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
-                            all_features.append(features)
+                            if features:
+                                features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
+                                all_features.append(features)
                         except Exception as e:
                             logger.error(f"Error extracting features: {e}")
                                 
@@ -670,8 +670,8 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
         logger.error(f"Streaming error encountered: {e}")
         return None
     
-    logger.info(f"Total records processed: {record_count}")
-    logger.info(f"Total elements processed: {element_count}")
+    # logger.info(f"Total records processed: {record_count}")
+    # logger.info(f"Total elements processed: {element_count}")
     
     try:
         # Process the final 5-minute window
@@ -680,20 +680,25 @@ def extract_bgp_data(from_time, until_time, target_asn, target_prefixes=None,
             prefix_lengths, med_values, local_prefs, 
             communities_per_prefix, peer_updates, anomaly_data, temp_counts
         )
-        features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"Features at index {index}: {features}")
-        all_features.append(features)
+        if features:
+            features['Timestamp'] = current_window_start.strftime("%Y-%m-%d %H:%M:%S")
+            all_features.append(features)
         
         # Convert collected features to a DataFrame
-        df_features = pd.json_normalize(all_features, sep='_').fillna(0)
-        logger.info(df_features)
-        df_features.to_csv(output_file, index=False)
+        if all_features:
+            df_features = pd.json_normalize(all_features, sep='_').fillna(0)
+            logger.info(df_features)
+            df_features.to_csv(output_file, index=False)
+        else:
+            logger.warning("No features collected. CSV will not be created.")
+            df_features = pd.DataFrame()  # Empty DataFrame
+            df_features.to_csv(output_file, index=False)
         
     except Exception as e:
         logger.error(f"Final data processing error: {e}")
-        return None
-    
+        return None    
     return df_features
+
 
 def detect_anomalies(df, numeric_cols, threshold_multiplier=2):
     diff = df[numeric_cols].diff().abs()
