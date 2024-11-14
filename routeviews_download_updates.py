@@ -7,7 +7,7 @@ def download_bgp_updates(year, month, start_day, end_day, start_hour, end_hour, 
     
     base_url = f'http://archive.routeviews.org/bgpdata/{year}.{month_str}/UPDATES/'
     
-    download_dir = f'bgp_updates/{year}/{month_str}'
+    download_dir = f'../bgp_routeviews_updates/{year}/{month_str}'
     os.makedirs(download_dir, exist_ok=True)
     
     for day in range(start_day, end_day + 1):
